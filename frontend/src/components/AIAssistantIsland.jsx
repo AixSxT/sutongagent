@@ -8,7 +8,7 @@ import {
     HolderOutlined
 } from '@ant-design/icons';
 
-const AIAssistantIsland = ({ onSend, loading, messages }) => {
+const AIAssistantIsland = ({ onSend, onApplyWorkflow, loading, messages }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [inputValue, setInputValue] = useState('');
     const [detailedStatus, setDetailedStatus] = useState('idle'); // 'idle' | 'thinking' | 'generating'
@@ -129,12 +129,115 @@ const AIAssistantIsland = ({ onSend, loading, messages }) => {
 
     // 获取当前状态的文案和颜色类名
     const getStatusConfig = () => {
-        if (detailedStatus === 'thinking') return { text: 'Thinking...', class: 'thinking' };
-        if (detailedStatus === 'generating') return { text: 'Generating...', class: 'generating' };
-        return { text: 'AI Assistant', class: '' }; // Idle
+        if (detailedStatus === 'thinking') return { text: '思考中...', class: 'thinking' };
+        if (detailedStatus === 'generating') return { text: '生成中...', class: 'generating' };
+        return { text: 'AI 助手', class: '' }; // Idle
     };
 
     const statusConfig = getStatusConfig();
+
+    const extractWorkflowJson = (content) => {
+        if (typeof content !== 'string') return null;
+
+        const findWorkflow = (obj) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (Array.isArray(obj.nodes)) return obj;
+            if (obj.workflow && typeof obj.workflow === 'object' && Array.isArray(obj.workflow.nodes)) return obj.workflow;
+            return null;
+        };
+
+        const tryParse = (jsonString) => {
+            try {
+                return findWorkflow(JSON.parse(jsonString));
+            } catch {
+                return null;
+            }
+        };
+
+        const fenced = content.match(/```json\\s*([\\s\\S]*?)```/i);
+        if (fenced?.[1]) {
+            const parsed = tryParse(fenced[1].trim());
+            if (parsed) return { workflow: parsed, jsonString: fenced[1].trim(), start: fenced.index ?? 0, end: (fenced.index ?? 0) + fenced[0].length };
+        }
+
+        const extractBalancedObject = (text, startIdx) => {
+            let depth = 0;
+            let inString = false;
+            let escape = false;
+            for (let i = startIdx; i < text.length; i++) {
+                const ch = text[i];
+                if (inString) {
+                    if (escape) escape = false;
+                    else if (ch === '\\\\') escape = true;
+                    else if (ch === '"') inString = false;
+                    continue;
+                }
+
+                if (ch === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (ch === '{') depth++;
+                if (ch === '}') {
+                    depth--;
+                    if (depth === 0) return { jsonString: text.slice(startIdx, i + 1), endIdx: i + 1 };
+                }
+            }
+            return null;
+        };
+
+        for (let i = 0; i < content.length; i++) {
+            if (content[i] !== '{') continue;
+            const extracted = extractBalancedObject(content, i);
+            if (!extracted?.jsonString) continue;
+            if (!extracted.jsonString.includes('"nodes"')) continue;
+            const workflow = tryParse(extracted.jsonString);
+            if (workflow) return { workflow, jsonString: extracted.jsonString, start: i, end: extracted.endIdx };
+            i = extracted.endIdx - 1;
+        }
+
+        return null;
+    };
+
+    const renderMessageContent = (msg) => {
+        const content = typeof msg?.content === 'string' ? msg.content : '';
+        const isAssistant = msg?.role === 'assistant';
+
+        if (isAssistant) {
+            const extracted = extractWorkflowJson(content);
+            if (extracted?.workflow) {
+                const explanation = [
+                    content.slice(0, extracted.start).trim(),
+                    content.slice(extracted.end).trim()
+                ].filter(Boolean).join('\n\n').trim();
+
+                const nodeCount = Array.isArray(extracted.workflow.nodes) ? extracted.workflow.nodes.length : 0;
+                const edgeCount = Array.isArray(extracted.workflow.edges) ? extracted.workflow.edges.length : 0;
+
+                return (
+                    <div style={{ whiteSpace: 'pre-wrap' }}>
+                        <div style={{ opacity: 0.9 }}>
+                            {explanation || '已生成工作流：'}
+                        </div>
+                        <div style={{ marginTop: 8, opacity: 0.75, fontSize: 12 }}>
+                            节点：{nodeCount}，连线：{edgeCount}
+                        </div>
+                        <div style={{ marginTop: 10 }}>
+                            <Button
+                                size="small"
+                                onClick={() => onApplyWorkflow?.(extracted.workflow)}
+                                disabled={!onApplyWorkflow}
+                            >
+                                应用到画布
+                            </Button>
+                        </div>
+                    </div>
+                );
+            }
+        }
+
+        return <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>;
+    };
 
     // --- 动态样式 ---
     const dynamicStyle = {
@@ -172,7 +275,7 @@ const AIAssistantIsland = ({ onSend, loading, messages }) => {
                     {/* 状态文字 */}
                     <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                         <span className="status-text-anim" style={{ fontSize: 13, fontWeight: 600, color: 'white' }}>
-                            {loading ? statusConfig.text : 'ExcelFlow Copilot'}
+                            {loading ? statusConfig.text : 'ExcelFlow 智能助手'}
                         </span>
                     </div>
                 </div>
@@ -203,12 +306,12 @@ const AIAssistantIsland = ({ onSend, loading, messages }) => {
                 <div className="ai-message-area">
                     {messages.length === 0 ? (
                         <div style={{ padding: '20px 0', color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>
-                            Try asking: "Analyze the sales trend"
+                            试试这样问：“帮我分析一下销售趋势”
                         </div>
                     ) : (
                         messages.map((msg, idx) => (
                             <div key={idx} className={`chat-bubble ${msg.role === 'user' ? 'user' : 'ai'}`}>
-                                {msg.content}
+                                {renderMessageContent(msg)}
                             </div>
                         ))
                     )}
@@ -223,7 +326,7 @@ const AIAssistantIsland = ({ onSend, loading, messages }) => {
                         value={inputValue}
                         onChange={e => setInputValue(e.target.value)}
                         onPressEnter={loading ? undefined : handleSend} // 忙碌时禁止回车
-                        placeholder={loading ? "Please wait..." : "Type a command..."}
+                        placeholder={loading ? "请稍候..." : "输入指令或提问..."}
                         disabled={loading} // 禁用输入
                         bordered={false}
                     />

@@ -370,12 +370,15 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
                             dataSource={files}
                             split={false}
                             renderItem={item => (
+                                (() => {
+                                    const fileId = item.file_id || item.id;
+                                    return (
                                 <List.Item style={{ padding: '6px 0' }}
                                     actions={[
                                         <DeleteOutlined
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                onDelete(item.file_id);
+                                                onDelete(fileId);
                                             }}
                                             style={{ color: '#C7C7CC', cursor: 'pointer', fontSize: 12 }}
                                         />
@@ -383,9 +386,11 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
                                 >
                                     <List.Item.Meta
                                         avatar={<FileExcelOutlined style={{ color: '#34C759', fontSize: 16, marginTop: 4 }} />}
-                                        title={<a onClick={() => onPreview(item.file_id)} style={{ fontSize: 12, color: '#1D1D1F', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>{item.filename}</a>}
+                                        title={<a onClick={() => onPreview(fileId)} style={{ fontSize: 12, color: '#1D1D1F', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>{item.filename}</a>}
                                     />
                                 </List.Item>
+                                    );
+                                })()
                             )}
                             locale={{ emptyText: <span style={{ fontSize: 11, color: '#ccc' }}>暂无文件</span> }}
                         />
@@ -464,12 +469,23 @@ function App() {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+    const getFileId = (file) => file?.file_id || file?.id;
+
+    const normalizeFiles = (list) => (Array.isArray(list) ? list.map(f => ({
+        ...f,
+        file_id: getFileId(f)
+    })) : []);
+
     // 获取文件的Sheet列表
     const loadFileSheets = async (fileId) => {
         if (fileSheets[fileId]) return fileSheets[fileId];
-        const file = files.find(f => f.file_id === fileId);
+        const file = files.find(f => getFileId(f) === fileId);
         if (file && file.sheets) {
-            const sheets = JSON.parse(file.sheets);
+            let sheets = file.sheets;
+            if (typeof sheets === 'string') {
+                try { sheets = JSON.parse(sheets); } catch { sheets = []; }
+            }
+            if (!Array.isArray(sheets)) sheets = [];
             setFileSheets(prev => ({ ...prev, [fileId]: sheets }));
             return sheets;
         }
@@ -479,7 +495,7 @@ function App() {
     // 获取当前选中文件的Sheet选项
     const getSheetOptions = (fileId) => {
         if (!fileId) return [];
-        const file = files.find(f => f.file_id === fileId);
+        const file = files.find(f => getFileId(f) === fileId);
         if (file && file.sheets) {
             let sheets = file.sheets;
             if (typeof sheets === 'string') {
@@ -495,7 +511,7 @@ function App() {
     // 获取指定文件+Sheet的列名
     const getColumnOptions = (fileId, sheetName) => {
         if (!fileId) return [];
-        const file = files.find(f => f.file_id === fileId);
+        const file = files.find(f => getFileId(f) === fileId);
         if (file && file.sheets) {
             let sheets = file.sheets;
             if (typeof sheets === 'string') {
@@ -703,7 +719,7 @@ function App() {
         switch (type) {
             case 'source':
             case 'source_csv':
-                const file = files.find(f => f.file_id === config.file_id);
+                const file = files.find(f => getFileId(f) === config.file_id);
                 return file ? `${file.filename.slice(0, 10)}...` : '未选择文件';
             case 'transform': return config.filter_code || '数据处理';
             case 'join': return config.how ? `${config.how} join` : '配置关联';
@@ -732,7 +748,7 @@ function App() {
         const init = async () => {
             try {
                 const fileData = await excelApi.getFiles();
-                setFiles(fileData.files || []);
+                setFiles(normalizeFiles(fileData.files));
                 const workflowData = await workflowApi.getList();
                 setSavedWorkflows(workflowData.workflows || []);
             } catch (error) {
@@ -748,7 +764,7 @@ function App() {
             const result = await excelApi.upload(file);
             message.success('上传成功');
             const data = await excelApi.getFiles();
-            setFiles(data.files || []);
+            setFiles(normalizeFiles(data.files));
             setSelectedFiles(prev => [...prev, result.file_id]);
         } catch (error) {
             message.error('上传失败');
@@ -761,12 +777,13 @@ function App() {
     const deleteFile = async (fileId) => {
         try {
             await excelApi.deleteFile(fileId);
-            setFiles(prev => prev.filter(f => f.file_id !== fileId));
+            const data = await excelApi.getFiles();
+            setFiles(normalizeFiles(data.files));
             setSelectedFiles(prev => prev.filter(id => id !== fileId));
             message.success('文件已删除');
         } catch (error) {
             console.error('Delete file failed:', error);
-            message.error('删除文件失败');
+            message.error('删除文件失败: ' + (error.response?.data?.detail || error.message));
         }
     };
 
@@ -958,32 +975,349 @@ function App() {
         return tables;
     };
 
-    // 开始对话（选择表后）
-    const startChat = async (selectedTables = chatSelectedTables) => {
-        if (selectedTables.length === 0) {
-            message.warning('请至少选择一个表');
+    const extractJsonCodeBlock = (content) => {
+        if (typeof content !== 'string') return null;
+        const match = content.match(/```json\\s*([\\s\\S]*?)```/i);
+        return match?.[1]?.trim() || null;
+    };
+
+    const extractWorkflowFromText = (content) => {
+        if (typeof content !== 'string') return null;
+
+        const findWorkflow = (obj) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (Array.isArray(obj.nodes)) return obj;
+            if (obj.workflow && typeof obj.workflow === 'object' && Array.isArray(obj.workflow.nodes)) return obj.workflow;
+            return null;
+        };
+
+        const tryParse = (jsonString) => {
+            try {
+                return findWorkflow(JSON.parse(jsonString));
+            } catch {
+                return null;
+            }
+        };
+
+        const fenced = extractJsonCodeBlock(content);
+        if (fenced) {
+            const parsed = tryParse(fenced);
+            if (parsed) return parsed;
+        }
+
+        const extractBalancedObject = (text, startIdx) => {
+            let depth = 0;
+            let inString = false;
+            let escape = false;
+            for (let i = startIdx; i < text.length; i++) {
+                const ch = text[i];
+                if (inString) {
+                    if (escape) escape = false;
+                    else if (ch === '\\\\') escape = true;
+                    else if (ch === '"') inString = false;
+                    continue;
+                }
+
+                if (ch === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (ch === '{') depth++;
+                if (ch === '}') {
+                    depth--;
+                    if (depth === 0) return { jsonString: text.slice(startIdx, i + 1), endIdx: i + 1 };
+                }
+            }
+            return null;
+        };
+
+        for (let i = 0; i < content.length; i++) {
+            if (content[i] !== '{') continue;
+            const extracted = extractBalancedObject(content, i);
+            if (!extracted?.jsonString) continue;
+            if (!extracted.jsonString.includes('"nodes"')) continue;
+            const workflow = tryParse(extracted.jsonString);
+            if (workflow) return workflow;
+            i = extracted.endIdx - 1;
+        }
+
+        return null;
+    };
+
+    const containsWorkflowJson = (content) => !!extractWorkflowFromText(content);
+
+    const workflowToReactFlow = (workflow) => {
+        if (!workflow || typeof workflow !== 'object') return { nodes: [], edges: [] };
+
+        const rawNodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+        const rawEdges = Array.isArray(workflow.edges) ? workflow.edges : [];
+
+        const ensureFinitePosition = (pos) => {
+            const x = Number(pos?.x);
+            const y = Number(pos?.y);
+            return {
+                x: Number.isFinite(x) ? x : 0,
+                y: Number.isFinite(y) ? y : 0
+            };
+        };
+
+        const nodesAlreadyFlow = rawNodes.some(n => n && typeof n === 'object' && 'data' in n);
+        const edgesAlreadyFlow = rawEdges.some(e => e && typeof e === 'object' && 'source' in e && 'target' in e && 'id' in e);
+
+        const coerceNodeId = (node, index) => {
+            const candidate = node?.id ?? node?.node_id ?? node?.nodeId ?? node?.key ?? node?.name ?? node?.label;
+            const value = candidate == null ? '' : String(candidate).trim();
+            return value || `ai_node_${index + 1}`;
+        };
+
+        const coerceEdgeRef = (edge, key) => {
+            const raw = edge?.[key];
+            if (raw == null) return null;
+            if (typeof raw === 'object') {
+                const nested = raw?.id ?? raw?.node_id ?? raw?.nodeId ?? raw?.key ?? raw?.name;
+                return nested == null ? null : String(nested).trim();
+            }
+            return String(raw).trim();
+        };
+
+        const coerceEdgeSource = (edge) =>
+            coerceEdgeRef(edge, 'source') ?? coerceEdgeRef(edge, 'from') ?? coerceEdgeRef(edge, 'src') ?? coerceEdgeRef(edge, 'source_id') ?? coerceEdgeRef(edge, 'sourceId');
+        const coerceEdgeTarget = (edge) =>
+            coerceEdgeRef(edge, 'target') ?? coerceEdgeRef(edge, 'to') ?? coerceEdgeRef(edge, 'dst') ?? coerceEdgeRef(edge, 'target_id') ?? coerceEdgeRef(edge, 'targetId');
+
+        let flowNodes = nodesAlreadyFlow
+            ? rawNodes.map((n, index) => ({
+                ...n,
+                id: coerceNodeId(n, index),
+                type: n.type || 'custom',
+                position: ensureFinitePosition(n?.position)
+            }))
+            : rawNodes.map((node, index) => ({
+                id: coerceNodeId(node, index),
+                type: 'custom',
+                position: { x: 0, y: 0 },
+                data: {
+                    type: node.type || node.node_type || node.op || node.operation,
+                    label: node.label || node.name || node.title || NODE_TYPES_CONFIG[node.type]?.label || node.type,
+                    description: 'AI 对话生成',
+                    config: node.config ?? node.params ?? node.parameters ?? node.args
+                }
+            }));
+
+        const flowEdges = edgesAlreadyFlow
+            ? rawEdges.map((e, index) => ({
+                ...e,
+                id: String(e?.id ?? '').trim() || `e${index}`,
+                source: coerceEdgeSource(e),
+                target: coerceEdgeTarget(e),
+                type: e.type || 'smoothstep',
+                style: e.style || { strokeWidth: 2, stroke: '#C7C7CC' },
+                markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed }
+            }))
+            : rawEdges.map((edge, index) => ({
+                id: edge.id || `e${index}`,
+                source: coerceEdgeSource(edge),
+                target: coerceEdgeTarget(edge),
+                type: 'smoothstep',
+                style: { strokeWidth: 2, stroke: '#C7C7CC' },
+                markerEnd: { type: MarkerType.ArrowClosed }
+            }));
+
+        const uniqueIdByOriginalId = new Map();
+        const usedIds = new Set();
+        flowNodes = flowNodes.map((node, index) => {
+            const originalId = String(node?.id ?? '');
+            let nextId = originalId.trim() || `ai_node_${index + 1}`;
+            if (usedIds.has(nextId)) {
+                let suffix = 2;
+                while (usedIds.has(`${nextId}_${suffix}`)) suffix++;
+                nextId = `${nextId}_${suffix}`;
+            }
+            usedIds.add(nextId);
+            if (!uniqueIdByOriginalId.has(originalId)) uniqueIdByOriginalId.set(originalId, nextId);
+            return { ...node, id: nextId };
+        });
+
+        const remapNodeRef = (ref) => {
+            const key = String(ref ?? '').trim();
+            return uniqueIdByOriginalId.get(key) ?? (key || null);
+        };
+        const remappedEdges = flowEdges.map(e => ({
+            ...e,
+            source: remapNodeRef(e?.source),
+            target: remapNodeRef(e?.target)
+        }));
+
+        const nodeIdSet = new Set(flowNodes.map(n => n.id));
+        const filteredEdges = remappedEdges.filter(e => e?.source && e?.target && nodeIdSet.has(e.source) && nodeIdSet.has(e.target));
+
+        flowNodes = calculateWorkflowLayout(flowNodes, filteredEdges);
+        return { nodes: flowNodes, edges: filteredEdges };
+    };
+
+    const normalizeFileMatchKey = (value) => {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\\/]/g, '/')
+            .split('/')
+            .pop()
+            .replace(/\s+/g, '')
+            .replace(/[-_]/g, '')
+            .replace(/\.(xlsx|xls|csv|tsv)$/i, '');
+    };
+
+    const scoreStringMatch = (candidate, query) => {
+        if (!candidate || !query) return 0;
+        if (candidate === query) return 100;
+        if (candidate.includes(query)) return 80;
+        if (query.includes(candidate)) return 70;
+
+        const candidateTokens = candidate.split(/[^a-z0-9]+/i).filter(Boolean);
+        const queryTokens = query.split(/[^a-z0-9]+/i).filter(Boolean);
+        if (!candidateTokens.length || !queryTokens.length) return 0;
+
+        const set = new Set(candidateTokens);
+        const overlap = queryTokens.filter(t => set.has(t)).length;
+        return Math.round((overlap / Math.max(candidateTokens.length, queryTokens.length)) * 60);
+    };
+
+    const resolveFileId = (filenameOrPath) => {
+        if (!filenameOrPath) return null;
+        const raw = String(filenameOrPath);
+
+        const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+        if (uuidMatch) return uuidMatch[0];
+
+        const query = normalizeFileMatchKey(raw);
+        if (!query) return null;
+
+        let best = { score: 0, file: null };
+        for (const file of files) {
+            const fileId = getFileId(file);
+            const fileName = file?.filename || file?.name || '';
+            if (!fileId || !fileName) continue;
+
+            const candidate = normalizeFileMatchKey(fileName);
+            const score = scoreStringMatch(candidate, query);
+            if (score > best.score) best = { score, file };
+        }
+
+        if (best.score < 50) return null;
+        return getFileId(best.file);
+    };
+
+    const handleApplyWorkflow = (workflowData) => {
+        console.log('[AI-Chat] handleApplyWorkflow input:', workflowData);
+        let workflow = null;
+
+        if (typeof workflowData === 'string') {
+            workflow = extractWorkflowFromText(workflowData);
+        } else if (workflowData && typeof workflowData === 'object') {
+            workflow = workflowData.workflow && Array.isArray(workflowData.workflow.nodes)
+                ? workflowData.workflow
+                : workflowData;
+        }
+
+        console.log('[AI-Chat] handleApplyWorkflow extracted workflow:', workflow);
+        if (!workflow || !Array.isArray(workflow.nodes)) {
+            message.error('No applicable workflow data found.');
             return;
         }
 
-        console.log('[AI-Chat] 开始对话，选中表:', selectedTables);
+        const normalized = {
+            ...workflow,
+            edges: Array.isArray(workflow.edges)
+                ? workflow.edges
+                : (Array.isArray(workflow.connections) ? workflow.connections : []),
+            nodes: workflow.nodes.map((node) => {
+                const config = node?.config || node?.params || {};
+                const nextConfig = { ...config };
+
+                if (!nextConfig.file_id) {
+                    const directId = nextConfig.fileId || nextConfig.fileID || node?.file_id || node?.fileId || node?.fileID;
+                    if (directId) nextConfig.file_id = directId;
+                }
+
+                if (!nextConfig.file_id) {
+                    const candidate = nextConfig.file_path || nextConfig.filename || nextConfig.file_name || nextConfig.file || nextConfig.path;
+                    if (candidate) {
+                        const resolved = resolveFileId(candidate);
+                        if (resolved) nextConfig.file_id = resolved;
+                    }
+                }
+
+                if (!nextConfig.sheet_name) {
+                    if (nextConfig.sheet) nextConfig.sheet_name = nextConfig.sheet;
+                    if (nextConfig.sheetName) nextConfig.sheet_name = nextConfig.sheetName;
+                }
+
+                return {
+                    ...node,
+                    config: nextConfig
+                };
+            })
+        };
+
+        try {
+            const { nodes: flowNodes, edges: flowEdges } = workflowToReactFlow(normalized);
+
+            console.log('[AI-Chat] handleApplyWorkflow mapped flowNodes:', flowNodes);
+            if (!Array.isArray(flowNodes) || flowNodes.length === 0) {
+                message.warning('Parsed 0 valid nodes from response.');
+                return;
+            }
+
+            setNodes(flowNodes);
+            setEdges(Array.isArray(flowEdges) ? flowEdges : []);
+
+            requestAnimationFrame(() => {
+                try {
+                    reactFlowInstance?.fitView?.({ padding: 0.2, duration: 300 });
+                } catch (e) {
+                    console.warn('[AI-Chat] fitView failed:', e);
+                }
+            });
+            message.success('Workflow applied to canvas.');
+        } catch (e) {
+            console.error('[AI-Chat] handleApplyWorkflow failed:', e);
+            message.error('Apply failed: invalid workflow format.');
+        }
+    };
+
+    // 开始对话（并可选发送第一句话）
+    const startChat = async (initialMessage) => {
+        if (!chatSelectedTables || chatSelectedTables.length === 0) {
+            message.warning('请先选择要处理的表（或先上传包含 Sheet 的文件）');
+            return null;
+        }
+
         setChatLoading(true);
 
         try {
-            const selectedFiles = selectedTables.map(key => {
+            const selectedFiles = chatSelectedTables.map(key => {
                 const [file_id, sheet_name] = key.split('::');
                 return { file_id, sheet_name };
             });
 
-            const result = await aiApi.chatStart(selectedFiles);
-            console.log('[AI-Chat] 对话开始成功:', result);
+            const startResult = await aiApi.chatStart(selectedFiles);
+            setChatSessionId(startResult.session_id);
+            setChatMessages([{ role: 'assistant', content: startResult.message }]);
+            setChatStatus(startResult.status || '');
 
-            setChatSessionId(result.session_id);
-            setChatMessages([{ role: 'assistant', content: result.message }]);
-            setChatStatus(result.status);
-            setChatStep('chat');
-            return result;
+            const firstMsg = (typeof initialMessage === 'string' ? initialMessage : '').trim();
+            if (!firstMsg) return startResult;
+
+            setChatMessages(prev => [...prev, { role: 'user', content: firstMsg }]);
+            const followUp = await aiApi.chatMessage(startResult.session_id, firstMsg);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: followUp.message }]);
+
+            if (containsWorkflowJson(followUp.message)) setChatStatus('workflow_ready');
+            else setChatStatus(followUp.status || startResult.status || '');
+
+            return startResult;
         } catch (error) {
-            console.error('[AI-Chat] 开始对话失败:', error);
+            console.error('[AI-Chat] startChat failed:', error);
             message.error('开始对话失败: ' + (error.response?.data?.detail || error.message));
             return null;
         } finally {
@@ -991,34 +1325,40 @@ function App() {
         }
     };
 
-    // 修改后的发送函数
-    const sendChatMessage = async (msgText, sessionIdOverride) => {
-        // 优先使用传入的 msgText，如果没有则使用 state 里的 chatInput
-        // 注意：msgText 可能是事件对象，所以要判断类型
-        const userMsg = (typeof msgText === 'string' ? msgText : chatInput).trim();
-        const currentSessionId = sessionIdOverride || chatSessionId;
-        
-        if (!userMsg || !currentSessionId) return;
+    const handleIslandSend = async (content) => {
+        const userMsg = (typeof content === 'string' ? content : '').trim();
+        if (!userMsg) return;
 
-        console.log('[AI-Chat] 发送消息:', userMsg);
+        if (!chatSessionId) {
+            const tables = chatSelectedTables.length > 0 ? chatSelectedTables : getAvailableTables().map(t => t.key);
+            if (!tables.length) {
+                message.warning('请先在左侧上传要处理的文件');
+                return;
+            }
+            if (tables !== chatSelectedTables) setChatSelectedTables(tables);
+            await startChat(userMsg);
+            return;
+        }
 
         setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-        // setChatInput(''); // 灵动岛组件内部自己清空了，这里可以不操作，或者保留也不影响
         setChatLoading(true);
 
         try {
-            const result = await aiApi.chatMessage(currentSessionId, userMsg);
-            console.log('[AI-Chat] 收到回复:', result);
-
+            const result = await aiApi.chatMessage(chatSessionId, userMsg);
             setChatMessages(prev => [...prev, { role: 'assistant', content: result.message }]);
-            setChatStatus(result.status);
+
+            if (containsWorkflowJson(result.message)) setChatStatus('workflow_ready');
+            else setChatStatus(result.status || '');
         } catch (error) {
-            console.error('[AI-Chat] 发送消息失败:', error);
+            console.error('[AI-Chat] handleIslandSend failed:', error);
             message.error('发送失败: ' + (error.response?.data?.detail || error.message));
         } finally {
             setChatLoading(false);
         }
     };
+
+    // 兼容旧 UI 中的引用（即使当前不渲染）
+    const sendChatMessage = handleIslandSend;
 
     // 确认生成工作流
     const confirmGenerateWorkflow = async () => {
@@ -1900,7 +2240,7 @@ function App() {
                             onUpload={handleUpload}
                             onDelete={deleteFile}
                             onPreview={(fid) => {
-                                const f = files.find(x => x.file_id === fid);
+                                const f = files.find(x => getFileId(x) === fid);
                                 if (f && f.sheets) {
                                     const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
                                     if (sheets.length > 0) handlePreview(fid, sheets[0].name);
@@ -1930,12 +2270,23 @@ function App() {
                         nodes={nodes} edges={edges} onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange} onConnect={onConnect}
                         onEdgeUpdate={onEdgeUpdate} onEdgeUpdateEnd={onEdgeUpdateEnd}
-                        onNodeClick={onNodeClick} nodeTypes={nodeTypes} fitView
+                        onNodeClick={onNodeClick} nodeTypes={nodeTypes}
+                        snapToGrid={true}
+                        snapGrid={[15, 15]}
+                        minZoom={0.1}
+                        maxZoom={1.5}
+                        fitView
+                        fitViewOptions={{ padding: 0.2 }}
                         onInit={setReactFlowInstance}
                         onDrop={onDrop} onDragOver={onDragOver}
-                        defaultEdgeOptions={{ type: 'default', animated: true, style: { strokeWidth: 2, stroke: '#b1b1b7' } }}
+                        defaultEdgeOptions={{
+                            type: 'smoothstep',
+                            animated: true,
+                            style: { stroke: '#b1b1b7', strokeWidth: 2 },
+                            markerEnd: { type: MarkerType.ArrowClosed }
+                        }}
                     >
-                        <Background color="#E5E5EA" gap={20} size={1} />
+                        <Background variant="dots" color="#e5e5ea" gap={15} size={1} />
                         <Controls showInteractive={false} />
                         {nodes.length === 0 && (
                             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
@@ -1977,7 +2328,7 @@ function App() {
 
             <Modal open={showPreview} onCancel={() => setShowPreview(false)} footer={null} width={1100} title="预览数据" centered styles={{ body: { padding: 0 } }}>
                 {previewFileId && (() => {
-                    const f = files.find(x => x.file_id === previewFileId);
+                    const f = files.find(x => getFileId(x) === previewFileId);
                     if (f && f.sheets) {
                         const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
                         return (
@@ -2051,26 +2402,8 @@ function App() {
             <AIAssistantIsland
                 messages={chatMessages}
                 loading={chatLoading}
-                onSend={(msg) => {
-                    if (!chatSessionId) {
-                        const tables = chatSelectedTables.length > 0
-                            ? chatSelectedTables
-                            : getAvailableTables().map(t => t.key);
-
-                        if (tables.length === 0) {
-                            message.warning('请先在左侧上传要处理的文件');
-                            return;
-                        }
-
-                        setChatSelectedTables(tables);
-                        startChat(tables).then((result) => {
-                            if (result?.session_id) sendChatMessage(msg, result.session_id);
-                        });
-                        return;
-                    }
-
-                    sendChatMessage(msg);
-                }}
+                onSend={handleIslandSend}
+                onApplyWorkflow={handleApplyWorkflow}
             />
             {false && (<Drawer
                 title={
@@ -2410,8 +2743,8 @@ const calculateWorkflowLayout = (nodes, edges) => {
         const index = nodesInLevel.indexOf(n.id);
 
         // 布局参数
-        const xSpacing = 350;
-        const ySpacing = 150;
+        const xSpacing = 300;
+        const ySpacing = 120;
         const startX = 100;
 
         // 让每一层垂直居中
