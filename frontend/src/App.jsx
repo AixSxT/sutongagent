@@ -35,6 +35,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { excelApi, aiApi, workflowApi } from './services/api';
+import AIAssistantIsland from './components/AIAssistantIsland';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -443,6 +444,7 @@ function App() {
 
     // ============ AI对话模式状态 ============
 
+    const [aiDrawerVisible, setAiDrawerVisible] = useState(false);
     const [chatStep, setChatStep] = useState('select'); // select: 选表, chat: 对话
     const [chatSelectedTables, setChatSelectedTables] = useState([]); // 选中的表
     const [chatSessionId, setChatSessionId] = useState(null); // 对话会话ID
@@ -450,8 +452,6 @@ function App() {
     const [chatInput, setChatInput] = useState(''); // 用户输入
     const [chatLoading, setChatLoading] = useState(false); // 对话加载中
     const [chatStatus, setChatStatus] = useState(''); // clarifying / confirmed
-
-    const [aiDrawerVisible, setAiDrawerVisible] = useState(false); // 控制AI抽屉显示
 
     // ============ 执行状态可视化 ============
     const [nodeExecutionStatus, setNodeExecutionStatus] = useState({}); // {nodeId: 'pending'|'running'|'success'|'error'}
@@ -959,17 +959,17 @@ function App() {
     };
 
     // 开始对话（选择表后）
-    const startChat = async () => {
-        if (chatSelectedTables.length === 0) {
+    const startChat = async (selectedTables = chatSelectedTables) => {
+        if (selectedTables.length === 0) {
             message.warning('请至少选择一个表');
             return;
         }
 
-        console.log('[AI-Chat] 开始对话，选中表:', chatSelectedTables);
+        console.log('[AI-Chat] 开始对话，选中表:', selectedTables);
         setChatLoading(true);
 
         try {
-            const selectedFiles = chatSelectedTables.map(key => {
+            const selectedFiles = selectedTables.map(key => {
                 const [file_id, sheet_name] = key.split('::');
                 return { file_id, sheet_name };
             });
@@ -981,27 +981,33 @@ function App() {
             setChatMessages([{ role: 'assistant', content: result.message }]);
             setChatStatus(result.status);
             setChatStep('chat');
+            return result;
         } catch (error) {
             console.error('[AI-Chat] 开始对话失败:', error);
             message.error('开始对话失败: ' + (error.response?.data?.detail || error.message));
+            return null;
         } finally {
             setChatLoading(false);
         }
     };
 
-    // 发送消息
-    const sendChatMessage = async () => {
-        if (!chatInput.trim() || !chatSessionId) return;
+    // 修改后的发送函数
+    const sendChatMessage = async (msgText, sessionIdOverride) => {
+        // 优先使用传入的 msgText，如果没有则使用 state 里的 chatInput
+        // 注意：msgText 可能是事件对象，所以要判断类型
+        const userMsg = (typeof msgText === 'string' ? msgText : chatInput).trim();
+        const currentSessionId = sessionIdOverride || chatSessionId;
+        
+        if (!userMsg || !currentSessionId) return;
 
-        const userMsg = chatInput.trim();
         console.log('[AI-Chat] 发送消息:', userMsg);
 
         setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-        setChatInput('');
+        // setChatInput(''); // 灵动岛组件内部自己清空了，这里可以不操作，或者保留也不影响
         setChatLoading(true);
 
         try {
-            const result = await aiApi.chatMessage(chatSessionId, userMsg);
+            const result = await aiApi.chatMessage(currentSessionId, userMsg);
             console.log('[AI-Chat] 收到回复:', result);
 
             setChatMessages(prev => [...prev, { role: 'assistant', content: result.message }]);
@@ -1868,13 +1874,6 @@ function App() {
     return (
         <Layout className="app-container">
             <Header className="app-header" style={{ display: 'flex', alignItems: 'center', padding: '0 24px', background: 'white', borderBottom: '1px solid #f0f0f0', position: 'relative' }}>
-                <Button
-                    type={aiDrawerVisible ? 'primary' : 'text'}
-                    icon={<RobotOutlined style={{ fontSize: 18, color: aiDrawerVisible ? 'white' : '#1D1D1F' }} />}
-                    onClick={() => setAiDrawerVisible(!aiDrawerVisible)}
-                    style={{ width: 40, height: 40, borderRadius: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                />
-
                 <div className="app-logo" style={{
                     position: 'absolute',
                     left: '50%',
@@ -1941,7 +1940,7 @@ function App() {
                         {nodes.length === 0 && (
                             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
                                 <AppstoreOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.5 }} />
-                                <p>请在左侧"AI助手"中开始对话，或从"节点库"拖拽节点</p>
+                                <p>请使用 AI 助手开始对话，或从"节点库"拖拽节点</p>
                             </div>
                         )}
                     </ReactFlow>
@@ -2049,7 +2048,31 @@ function App() {
                     />
                 )}
             </Modal>
-            <Drawer
+            <AIAssistantIsland
+                messages={chatMessages}
+                loading={chatLoading}
+                onSend={(msg) => {
+                    if (!chatSessionId) {
+                        const tables = chatSelectedTables.length > 0
+                            ? chatSelectedTables
+                            : getAvailableTables().map(t => t.key);
+
+                        if (tables.length === 0) {
+                            message.warning('请先在左侧上传要处理的文件');
+                            return;
+                        }
+
+                        setChatSelectedTables(tables);
+                        startChat(tables).then((result) => {
+                            if (result?.session_id) sendChatMessage(msg, result.session_id);
+                        });
+                        return;
+                    }
+
+                    sendChatMessage(msg);
+                }}
+            />
+            {false && (<Drawer
                 title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <RobotOutlined style={{ color: '#FF2D55', fontSize: 20 }} />
@@ -2322,7 +2345,7 @@ function App() {
                         </div>
                     </div>
                 )}
-            </Drawer>
+            </Drawer>)}
         </Layout>
     );
 }
