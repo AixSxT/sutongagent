@@ -345,3 +345,265 @@ body {
 .ant-select.ios-select .ant-select-selection-item {
   line-height: 32px !important;
 }
+
+/* === Raycast 风格复刻 === */
+
+/* 主容器：Raycast 经典的深色磨砂面板 */
+.ai-island {
+  position: fixed;
+  /* Raycast 标志性的深灰半透明底色 */
+  background: rgba(22, 22, 22, 0.75);
+  /* 极高的模糊度，营造景深感 */
+  backdrop-filter: blur(40px) saturate(150%);
+  -webkit-backdrop-filter: blur(40px) saturate(150%);
+  /* 极其细腻的 1px 边框 + 只有 Raycast 敢用的深重阴影 */
+  box-shadow: 
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 24px 54px rgba(0, 0, 0, 0.45);
+  border-radius: 14px; /* 改为更专业的 14px 圆角 */
+  color: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 2000;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 顶部 Header */
+.ai-island-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+  cursor: default;
+  /* 极细的分隔线 */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.01);
+}
+
+/* Header 左侧标题区 */
+.ai-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.ai-header-title strong {
+  color: white;
+  font-weight: 600;
+}
+
+/* 消息滚动区域 */
+.ai-message-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  /* 滚动条隐藏 */
+  scrollbar-width: none;
+}
+.ai-message-area::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* 聊天气泡重构 - 更像 Note */
+.chat-bubble {
+  max-width: 90%;
+  padding: 8px 12px;
+  border-radius: 8px; /* 小圆角 */
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.chat-bubble.user {
+  /* Raycast 风格通常是极简的，用户气泡用强调色，但保持低调 */
+  background: rgba(0, 122, 255, 0.15);
+  color: #5EA0FF;
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  margin-left: auto;
+}
+
+.chat-bubble.ai {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  margin-right: auto;
+  padding-left: 0;
+}
+
+/* 底部输入框 - 模仿 Raycast 的 Footer */
+.ai-input-wrapper {
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 输入框本体 */
+.ai-input-field {
+  flex: 1;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: white !important;
+  font-size: 14px;
+  padding: 0;
+}
+.ai-input-field::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* 发送快捷键提示 (类似 Raycast 的 ↵ ) */
+.ai-enter-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* === 修复输入框白底/文字不显示问题 === */
+
+/* 1. 强制让输入框背景透明，文字变白 */
+.ai-input-wrapper .ant-input {
+  background-color: transparent !important; /* 去掉白底 */
+  color: rgba(255, 255, 255, 0.95) !important; /* 强制文字白色 */
+  border: none !important; /* 去掉边框 */
+  box-shadow: none !important; /* 去掉点击时的蓝色光晕 */
+  font-size: 14px;
+  height: 24px; /* 调整高度 */
+  padding: 0; /* 去掉内边距，靠 wrapper 控制 */
+}
+
+/* 2. 修改提示词 (Placeholder) 的颜色 */
+.ai-input-wrapper .ant-input::placeholder {
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* 3. 选中时的光标颜色 (Caret) */
+.ai-input-wrapper .ant-input {
+  caret-color: #5EA0FF; /* 光标设为蓝色 */
+}
+
+/* 4. 确保外层容器样式正确 (Raycast 底部栏) */
+.ai-input-wrapper {
+  padding: 14px 16px; /* 增加一点呼吸感 */
+  border-top: 1px solid rgba(255, 255, 255, 0.08); /* 极细分割线 */
+  background: rgba(0, 0, 0, 0.2); /* 比上方深一点，区分区域 */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 0 0 14px 14px; /* 底部圆角 */
+}
+
+/* 5. 右侧快捷键提示图标 */
+.ai-enter-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: -apple-system, monospace;
+  pointer-events: none;
+}
+
+/* === 状态反馈增强 === */
+
+/* 1. 顶部流光加载条 (Raycast 风格) */
+.ai-loading-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, #00C6FB, #005BEA, #FF6363, transparent);
+  background-size: 200% 100%;
+  animation: loading-slide 1.5s linear infinite;
+  z-index: 2001;
+  opacity: 0.8;
+}
+
+@keyframes loading-slide {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* 2. 状态图标颜色变体 */
+.ai-avatar-container {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ai-avatar-pulse {
+  animation: avatar-pulse 1.6s ease-in-out infinite;
+}
+
+.ai-avatar-container.thinking {
+  background: linear-gradient(135deg, #00C6FB, #005BEA); /* 蓝色 */
+  box-shadow: 0 0 15px rgba(0, 198, 251, 0.4);
+  animation: avatar-pulse 1.6s ease-in-out infinite;
+}
+
+.ai-avatar-container.generating {
+  background: linear-gradient(135deg, #a18cd1, #fbc2eb); /* 紫粉色 */
+  background-size: 200% 200%;
+  box-shadow: 0 0 15px rgba(161, 140, 209, 0.5);
+  animation: avatar-flow 1.1s linear infinite;
+}
+
+.ai-avatar-container.generating.ai-avatar-pulse {
+  animation: avatar-flow 1.1s linear infinite;
+}
+
+@keyframes avatar-pulse {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.04); filter: brightness(1.1); }
+}
+
+@keyframes avatar-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+
+/* 3. 输入框锁定态 (Disabled) */
+.ai-input-wrapper.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.1);
+  pointer-events: none;
+}
+
+.ai-input-wrapper.disabled .ai-input-field {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+.ai-input-wrapper.disabled .ant-input {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* 4. 状态文字动画 */
+.status-text-anim {
+  animation: fade-in-up 0.3s ease-out;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
