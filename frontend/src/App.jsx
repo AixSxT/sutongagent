@@ -18,7 +18,7 @@ import {
     ApiOutlined, CodeOutlined, SwapOutlined, ClearOutlined,
     SortAscendingOutlined, FieldStringOutlined,
     BarChartOutlined, NodeIndexOutlined, ProfileOutlined, ArrowDownOutlined,
-    FolderOutlined, SearchOutlined, FileTextOutlined, TableOutlined, ArrowLeftOutlined,
+    FolderOutlined, SearchOutlined, ToolOutlined, RocketOutlined, FileTextOutlined, TableOutlined, ArrowLeftOutlined,
     LoadingOutlined, CheckOutlined, CloseOutlined
 } from '@ant-design/icons';
 import ReactFlow, {
@@ -425,6 +425,7 @@ function NodeToolbox() {
 }
 
 function App() {
+    const [currentView, setCurrentView] = useState('canvas'); // 默认显示画布
     const [files, setFiles] = useState([]);
     const [selectedFiles, setSelectedFiles] = useState([]);
     const [userInput, setUserInput] = useState('');
@@ -2210,30 +2211,32 @@ function App() {
         }
     };
 
+    const navItems = [
+        { key: 'canvas', label: '画布', icon: <AppstoreOutlined /> },
+        { key: 'search', label: '搜索', icon: <SearchOutlined /> },
+        { key: 'tools', label: '常用工具', icon: <ToolOutlined /> },
+        { key: 'logistics', label: '物流', icon: <RocketOutlined /> },
+    ];
+
     // ============== 主界面 ==============
     return (
         <Layout className="app-container">
-            <Header className="app-header" style={{ display: 'flex', alignItems: 'center', padding: '0 24px', background: 'white', borderBottom: '1px solid #f0f0f0', position: 'relative' }}>
-                <div className="app-logo" style={{
-                    position: 'absolute',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    fontSize: 20,
-                    fontWeight: 800,
-                    color: '#1D1D1F',
-                    letterSpacing: '-0.5px'
-                }}>
-                    <span>EXCEL</span>
-                    <FileExcelFilled style={{ color: '#34C759', fontSize: 22 }} />
-                    <span>FLOW</span>
-                </div>
+            <Header className="app-header">
+                {navItems.map((item) => (
+                    <div
+                        key={item.key}
+                        className={`nav-item ${currentView === item.key ? 'active' : ''}`}
+                        onClick={() => setCurrentView(item.key)}
+                    >
+                        <span style={{ fontSize: 16 }}>{item.icon}</span>
+                        <span>{item.label}</span>
+                    </div>
+                ))}
             </Header>
 
             <Content className="app-content">
-                <div className="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <div style={{ display: currentView === 'canvas' ? 'flex' : 'none', width: '100%', height: '100%', gap: 24 }}>
+                        <div className="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
                     <div style={{ flex: 0.3, overflow: 'hidden', marginTop: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                         <FileManager
                             files={files}
@@ -2310,7 +2313,38 @@ function App() {
                             </div>
                         </div>
                     )}
+                        </div>
                 </div>
+
+                {/* Search View */}
+                {currentView === 'search' && (
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#888' }}>
+                        <div style={{ textAlign: 'center' }}>
+                            <SearchOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                            <h2>全局搜索</h2>
+                        </div>
+                    </div>
+                )}
+
+                {/* Tools View */}
+                {currentView === 'tools' && (
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#888' }}>
+                        <div style={{ textAlign: 'center' }}>
+                            <ToolOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                            <h2>常用工具箱</h2>
+                        </div>
+                    </div>
+                )}
+
+                {/* Logistics View */}
+                {currentView === 'logistics' && (
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#888' }}>
+                        <div style={{ textAlign: 'center' }}>
+                            <RocketOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                            <h2>物流中心</h2>
+                        </div>
+                    </div>
+                )}
             </Content>
 
             <Drawer title="配置节点" placement="right" width={400} onClose={() => setShowNodeConfig(false)} open={showNodeConfig} mask={false}

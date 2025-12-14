@@ -1,0 +1,330 @@
+/* RaycastHomePage.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+.rc-home-container {
+  /* 核心背景设定 */
+  background-color: #080808; /* 深黑色背景 */
+  color: #ffffff;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  /* 强制覆盖 Ant Design 的默认亮色主题变量 */
+  --ant-primary-color: #FF6363;
+}
+
+/* 顶部红光流溢效果 */
+.rc-bg-glow-top {
+  position: absolute;
+  top: -300px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 1400px;
+  height: 800px;
+  background: radial-gradient(50% 50% at 50% 50%, rgba(255, 99, 99, 0.15) 0%, rgba(255, 99, 99, 0) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ================= 顶部导航栏 ================= */
+.rc-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 64px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  /* 毛玻璃效果 */
+  background: rgba(8, 8, 8, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 100;
+}
+
+.rc-nav-content {
+  width: 100%;
+  max-width: 1200px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rc-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.rc-nav-links {
+  display: flex;
+  gap: 28px;
+}
+
+.rc-nav-links a {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.rc-nav-links a:hover {
+  color: #ffffff;
+}
+
+.rc-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.rc-login-link {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+.rc-login-link:hover { color: #ffffff; }
+
+/* 覆盖 Ant Design 按钮样式 */
+.rc-download-btn-small.ant-btn-primary {
+  background: rgba(255, 99, 99, 0.15);
+  border: none;
+  color: #FF6363;
+  font-weight: 600;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
+}
+.rc-download-btn-small.ant-btn-primary:hover {
+  background: rgba(255, 99, 99, 0.25);
+  color: #FF6363;
+}
+
+/* ================= 主体 Hero 区域 ================= */
+.rc-hero-section {
+  position: relative;
+  z-index: 1;
+  padding-top: 160px;
+  padding-bottom: 80px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.rc-hero-content {
+  max-width: 800px;
+  margin: 0 auto 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* New Badge */
+.rc-new-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 4px 12px 4px 4px;
+  border-radius: 100px;
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 32px;
+  transition: background 0.2s;
+}
+.rc-new-badge:hover { background: rgba(255, 255, 255, 0.1); }
+.rc-badge-label {
+  background: #FF6363;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 100px;
+  text-transform: uppercase;
+}
+
+/* 主标题 */
+.rc-hero-title {
+  font-size: 72px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 24px;
+}
+
+/* 渐变文字 */
+.rc-text-gradient {
+  background: linear-gradient(to right, #FF6363, #FFAB70);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 副标题 */
+.rc-hero-subtitle {
+  font-size: 20px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.6);
+  max-width: 640px;
+  margin: 0 auto 40px;
+}
+
+/* 主下载按钮 */
+.rc-primary-download-btn.ant-btn-primary {
+  height: 56px;
+  padding: 0 36px;
+  font-size: 17px;
+  font-weight: 600;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #000000;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.rc-primary-download-btn.ant-btn-primary:hover {
+  background: #f2f2f2;
+  color: #000000;
+}
+
+.rc-version-text {
+  margin-top: 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.rc-version-text a {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rc-version-text a:hover { color: #ffffff; }
+
+/* ================= 软件界面演示图 ================= */
+.rc-app-mockup-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  perspective: 1000px;
+}
+
+/* 底部红光反射 */
+.rc-app-glow {
+  position: absolute;
+  top: 80%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  height: 120px;
+  background: rgba(255, 99, 99, 0.3);
+  filter: blur(60px);
+  opacity: 0.6;
+  z-index: -1;
+}
+
+.rc-app-mockup {
+  background: rgba(22, 22, 22, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  box-shadow: 
+    0 24px 48px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(0,0,0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  overflow: hidden;
+  text-align: left;
+}
+
+.rc-app-search-bar {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.rc-search-icon { font-size: 18px; margin-right: 12px; }
+.rc-search-placeholder { flex: 1; font-size: 15px; }
+
+.rc-shortcut-hint kbd {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  margin-left: 4px;
+}
+
+.rc-app-list {
+  padding: 8px;
+}
+
+.rc-app-list-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  transition: background 0.1s;
+}
+
+.rc-app-list-item:hover { background: rgba(255, 255, 255, 0.05); }
+.rc-app-list-item.active {
+  background: #FF6363;
+  color: white;
+}
+.rc-app-list-item.active .rc-app-list-subtitle { color: rgba(255, 255, 255, 0.8); }
+.rc-app-list-item.active .rc-enter-hint { opacity: 0.8; }
+
+.rc-app-icon, .rc-app-icon-placeholder {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  margin-right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rc-app-list-content { flex: 1; }
+.rc-app-list-title { font-weight: 500; font-size: 14px; }
+.rc-app-list-subtitle { font-size: 12px; color: rgba(255, 255, 255, 0.4); }
+.rc-enter-hint { font-size: 14px; opacity: 0.4; }
+
+.rc-app-footer {
+  padding: 8px 16px;
+  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 500;
+}
+.rc-app-footer kbd {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    padding: 1px 4px;
+    margin-left: 4px;
+}
