@@ -36,6 +36,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { excelApi, aiApi, workflowApi } from './services/api';
 import AIAssistantIsland from './components/AIAssistantIsland';
+import RaycastHomePage from './components/RaycastHomePage';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -319,22 +320,24 @@ function CustomNode({ data, selected }) {
 const nodeTypes = { custom: CustomNode };
 
 // Draggable Node
-function DraggableNode({ type, config }) {
-    const onDragStart = (event) => {
+function DraggableNode({ type, config, onDragStart, onAddNode }) {
+    const onDragStartInternal = (event) => {
         event.dataTransfer.setData('application/reactflow', JSON.stringify({ type, config }));
         event.dataTransfer.effectAllowed = 'move';
     };
 
     return (
-        <div className="draggable-node" draggable onDragStart={onDragStart}>
+        <div
+            className="draggable-node"
+            draggable
+            onDragStart={(event) => (onDragStart ? onDragStart(event, type, config) : onDragStartInternal(event))}
+            onDoubleClick={() => onAddNode?.(type, config)}
+        >
             <div className="draggable-node-icon" style={{ background: config.color, boxShadow: `0 2px 8px ${config.color}40` }}>
                 {config.icon}
             </div>
-            <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{config.label}</div>
-                <div style={{ fontSize: 11, color: '#86868B' }}>{config.description}</div>
-            </div>
-            <PlusOutlined style={{ marginLeft: 'auto', color: '#C7C7CC', fontSize: 12 }} />
+            <div>{config.label}</div>
+            <div>{config.description}</div>
         </div>
     );
 }
@@ -343,12 +346,12 @@ function DraggableNode({ type, config }) {
 // === 文件管理组件 ===
 function FileManager({ files, onUpload, onDelete, onPreview }) {
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div className="file-manager" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
             <div style={{ flexShrink: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div className="file-manager-title" style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <CloudUploadOutlined /> 文件资源
                 </div>
-                <div style={{ background: 'white', borderRadius: 12, padding: 12, border: '1px solid rgba(0,0,0,0.02)', marginBottom: 12 }}>
+                <div className="file-upload-card" style={{ background: 'white', borderRadius: 12, padding: 12, border: '1px solid rgba(0,0,0,0.02)', marginBottom: 12 }}>
                     <Upload.Dragger
                         showUploadList={false}
                         customRequest={({ file, onSuccess, onError }) => onUpload({ file }).then(onSuccess).catch(onError)}
@@ -363,9 +366,10 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
             </div>
 
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ flex: 1, background: 'white', borderRadius: 12, border: '1px solid rgba(0,0,0,0.02)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div className="file-list-card" style={{ flex: 1, background: 'white', borderRadius: 12, border: '1px solid rgba(0,0,0,0.02)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
                         <List
+                            className="file-manager-list"
                             size="small"
                             dataSource={files}
                             split={false}
@@ -402,7 +406,7 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
 }
 
 // === 节点工具箱组件 ===
-function NodeToolbox() {
+function NodeToolbox({ onDragStart, onAddNode }) {
     return (
         <div style={{ paddingRight: 4 }}>
             {Object.entries(NODE_CATEGORIES).map(([catKey, cat]) => (
@@ -411,11 +415,11 @@ function NodeToolbox() {
                         {cat.icon}
                         {cat.label}
                     </div>
-                    <div style={{ display: 'grid', gap: 8 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: 5 }}>
                         {Object.entries(NODE_TYPES_CONFIG)
                             .filter(([_, cfg]) => cfg.category === catKey)
                             .map(([type, config]) => (
-                                <DraggableNode key={type} type={type} config={config} />
+                                <DraggableNode key={type} type={type} config={config} onDragStart={onDragStart} onAddNode={onAddNode} />
                             ))}
                     </div>
                 </div>
@@ -467,8 +471,16 @@ function App() {
 
     const reactFlowWrapper = useRef(null);
     const [reactFlowInstance, setReactFlowInstance] = useState(null);
+    const [showNodeLibrary, setShowNodeLibrary] = useState(false); // 控制组件库 Modal
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+    // 辅助函数：当从组件库拖拽节点时，存储节点信息（React Flow 识别的关键）
+    const onDragStartHandler = useCallback((event, nodeType, nodeConfig) => {
+        event.dataTransfer.setData('application/reactflow', JSON.stringify({ type: nodeType, config: nodeConfig }));
+        event.dataTransfer.effectAllowed = 'move';
+        console.log('Drag started for:', nodeType);
+    }, []);
 
     const getFileId = (file) => file?.file_id || file?.id;
 
@@ -658,7 +670,17 @@ function App() {
             return;
         }
 
-        const data = JSON.parse(rawData);
+        let data;
+        try {
+            data = JSON.parse(rawData);
+        } catch {
+            const fallbackConfig = NODE_TYPES_CONFIG[rawData];
+            if (!fallbackConfig) {
+                console.error('[DragDrop] ERROR: Unknown node type:', rawData);
+                return;
+            }
+            data = { type: rawData, config: fallbackConfig };
+        }
         console.log('[DragDrop] Parsed data:', data);
 
         const position = reactFlowInstance.project({
@@ -682,6 +704,36 @@ function App() {
         setShowNodeConfig(true);
         console.log('[DragDrop] Node created successfully');
     }, [reactFlowInstance, setNodes]);
+
+    const addNodeFromLibrary = useCallback((type, config) => {
+        if (!reactFlowWrapper.current) {
+            message.warning('画布未就绪：找不到画布容器');
+            return;
+        }
+        if (!reactFlowInstance) {
+            message.warning('画布未就绪：ReactFlow 尚未初始化');
+            return;
+        }
+
+        const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
+        const position = reactFlowInstance.project({
+            x: reactFlowBounds.width / 2,
+            y: reactFlowBounds.height / 2,
+        });
+
+        const newNode = {
+            id: `node_${Date.now()}`,
+            type: 'custom',
+            position,
+            data: { type, label: config.label, description: '点击配置', config: {} },
+        };
+
+        setNodes((nds) => nds.concat(newNode));
+        setSelectedNode(newNode);
+        setConfigFileId(null);
+        setConfigSheet(null);
+        setShowNodeConfig(true);
+    }, [reactFlowInstance, setNodes, setSelectedNode, setShowNodeConfig, setConfigFileId, setConfigSheet]);
 
     const onNodeClick = useCallback((event, node) => {
         setSelectedNode(node);
@@ -2235,94 +2287,110 @@ function App() {
             </Header>
 
             <Content className="app-content">
-                <div style={{ display: currentView === 'canvas' ? 'flex' : 'none', width: '100%', height: '100%', gap: 24 }}>
-                        <div className="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-                    <div style={{ flex: 0.3, overflow: 'hidden', marginTop: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                        <FileManager
-                            files={files}
-                            onUpload={handleUpload}
-                            onDelete={deleteFile}
-                            onPreview={(fid) => {
-                                const f = files.find(x => getFileId(x) === fid);
-                                if (f && f.sheets) {
-                                    const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
-                                    if (sheets.length > 0) handlePreview(fid, sheets[0].name);
-                                }
-                            }}
-                        />
-                    </div>
+                {/* 画布视图 (Canvas) */}
+                <div
+                    className="canvas-view-wrapper"
+                    style={{ display: currentView === 'canvas' ? 'block' : 'none' }}
+                >
+                    <div className="canvas-bg-glow-top" />
 
-                    <div style={{ flex: 0.7, overflow: 'hidden', marginTop: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                            <AppstoreOutlined /> 节点库
-                        </div>
-                        <div style={{ flex: 1, overflowY: 'auto' }}>
-                            <NodeToolbox />
-                        </div>
-                    </div>
-                </div>
-                <div className="canvas-container" ref={reactFlowWrapper}>
-                    <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
-                        <Space>
-                            <Button icon={<DeleteOutlined />} onClick={() => setNodes([])} style={{ backgroundColor: '#FF4D4F', borderColor: '#FF4D4F', color: 'white' }}>清空</Button>
-                            <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>执行</Button>
-                        </Space>
-                    </div>
-
-                    <ReactFlow
-                        nodes={nodes} edges={edges} onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange} onConnect={onConnect}
-                        onEdgeUpdate={onEdgeUpdate} onEdgeUpdateEnd={onEdgeUpdateEnd}
-                        onNodeClick={onNodeClick} nodeTypes={nodeTypes}
-                        snapToGrid={true}
-                        snapGrid={[15, 15]}
-                        minZoom={0.1}
-                        maxZoom={1.5}
-                        fitView
-                        fitViewOptions={{ padding: 0.2 }}
-                        onInit={setReactFlowInstance}
-                        onDrop={onDrop} onDragOver={onDragOver}
-                        defaultEdgeOptions={{
-                            type: 'smoothstep',
-                            animated: true,
-                            style: { stroke: '#b1b1b7', strokeWidth: 2 },
-                            markerEnd: { type: MarkerType.ArrowClosed }
-                        }}
-                    >
-                        <Background variant="dots" color="#e5e5ea" gap={15} size={1} />
-                        <Controls showInteractive={false} />
-                        {nodes.length === 0 && (
-                            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
-                                <AppstoreOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.5 }} />
-                                <p>请使用 AI 助手开始对话，或从"节点库"拖拽节点</p>
+                    <div className="canvas-workspace-centered">
+                        <div className="left-panel">
+                            {/* 文件资源区域 */}
+                            <div className="file-manager-section" style={{ flex: '0 0 calc(30% + 60px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0, marginTop: 0 }}>
+                                <FileManager
+                                    files={files}
+                                    onUpload={handleUpload}
+                                    onDelete={deleteFile}
+                                    onPreview={(fid) => {
+                                        const f = files.find(x => getFileId(x) === fid);
+                                        if (f && f.sheets) {
+                                            const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
+                                            if (sheets.length > 0) handlePreview(fid, sheets[0].name);
+                                        }
+                                    }}
+                                />
                             </div>
-                        )}
-                    </ReactFlow>
 
-                    {result && (
-                        <div className="result-floating-panel">
-                            <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontWeight: 600 }}>运行结果 ({result.total} 条)</span>
+                            {/* 新的组件库入口卡片 - 替换原节点工具箱区域 */}
+                            <div
+                                className="ios-card"
+                                style={{ flex: '1 1 auto', cursor: 'pointer', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', marginTop: 16, minHeight: 0 }}
+                                onClick={() => setShowNodeLibrary(true)}
+                            >
+                                <div className="card-content" style={{ textAlign: 'center', padding: '30px 20px' }}>
+                                    <AppstoreOutlined style={{ fontSize: 40, color: '#FF6363', marginBottom: 10 }} />
+                                    <div style={{ fontSize: 18, fontWeight: 700, color: '#f0f0f0' }}>组件库</div>
+                                    <div style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.5)', marginTop: 4 }}>点击打开所有流程节点</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="canvas-container">
+                            <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
                                 <Space>
-                                    <Button type="text" size="small" icon={<DownloadOutlined />} href={workflowApi.getDownloadUrl(result.outputFile)}>下载</Button>
-                                    <Button type="text" size="small" onClick={() => setResult(null)}>关闭</Button>
+                                    <Button icon={<DeleteOutlined />} onClick={() => setNodes([])} style={{ backgroundColor: '#FF4D4F', borderColor: '#FF4D4F', color: 'white' }}>清空</Button>
+                                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>执行</Button>
                                 </Space>
                             </div>
-                            <div style={{ flex: 1, overflow: 'auto' }}>
-                                <Table dataSource={result.dataSource} columns={result.columns} pagination={false} size="small" sticky />
+
+                            <div style={{ width: '100%', height: '100%', padding: '30px', boxSizing: 'border-box' }}>
+                                <div ref={reactFlowWrapper} style={{ width: '100%', height: '100%' }}>
+                                    <ReactFlow
+                                        nodes={nodes} edges={edges} onNodesChange={onNodesChange}
+                                        onEdgesChange={onEdgesChange} onConnect={onConnect}
+                                        onEdgeUpdate={onEdgeUpdate} onEdgeUpdateEnd={onEdgeUpdateEnd}
+                                        onNodeClick={onNodeClick} nodeTypes={nodeTypes}
+                                        snapToGrid={true}
+                                        snapGrid={[15, 15]}
+                                        minZoom={0.1}
+                                        maxZoom={1.5}
+                                        fitView
+                                        fitViewOptions={{ padding: 0.2 }}
+                                        onInit={setReactFlowInstance}
+                                        onDrop={onDrop} onDragOver={onDragOver}
+                                        style={{ width: '100%', height: '100%' }}
+                                        defaultEdgeOptions={{
+                                            type: 'smoothstep',
+                                            animated: true,
+                                            style: { stroke: '#b1b1b7', strokeWidth: 2 },
+                                            markerEnd: { type: MarkerType.ArrowClosed }
+                                        }}
+                                    >
+                                        <Background variant="dots" color="#e5e5ea" gap={15} size={1} />
+                                        <Controls showInteractive={false} />
+                                        {nodes.length === 0 && (
+                                            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
+                                                <AppstoreOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.5 }} />
+                                                <p>请使用 AI 助手开始对话，或从"节点库"拖拽节点</p>
+                                            </div>
+                                        )}
+                                    </ReactFlow>
+                                </div>
                             </div>
+
+                            {result && (
+                                <div className="result-floating-panel">
+                                    <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ fontWeight: 600 }}>运行结果 ({result.total} 条)</span>
+                                        <Space>
+                                            <Button type="text" size="small" icon={<DownloadOutlined />} href={workflowApi.getDownloadUrl(result.outputFile)}>下载</Button>
+                                            <Button type="text" size="small" onClick={() => setResult(null)}>关闭</Button>
+                                        </Space>
+                                    </div>
+                                    <div style={{ flex: 1, overflow: 'auto' }}>
+                                        <Table dataSource={result.dataSource} columns={result.columns} pagination={false} size="small" sticky />
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    )}
-                        </div>
+                    </div>
                 </div>
 
                 {/* Search View */}
                 {currentView === 'search' && (
-                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#888' }}>
-                        <div style={{ textAlign: 'center' }}>
-                            <SearchOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                            <h2>全局搜索</h2>
-                        </div>
+                    <div style={{ flex: 1, width: '100%', height: '100%', overflow: 'auto' }}>
+                        <RaycastHomePage />
                     </div>
                 )}
 
@@ -2439,6 +2507,31 @@ function App() {
                 onSend={handleIslandSend}
                 onApplyWorkflow={handleApplyWorkflow}
             />
+
+            {/* 组件库 Modal - 用于承载所有流程节点 */}
+            <Modal
+                title="流程节点库"
+                open={showNodeLibrary}
+                onCancel={() => setShowNodeLibrary(false)}
+                footer={null}
+                width={900}
+                centered
+                mask={false}
+                styles={{ body: { padding: 0 } }}
+                wrapClassName="node-library-modal-wrapper"
+            >
+                <div className="node-library-modal-body" style={{ display: 'flex', height: '60vh', background: 'transparent' }}>
+                    <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
+                        <NodeToolbox onDragStart={onDragStartHandler} onAddNode={addNodeFromLibrary} />
+                    </div>
+                    <div style={{ width: 300, background: 'rgba(255, 255, 255, 0.05)', borderLeft: '1px solid rgba(255, 255, 255, 0.1)', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                        <DragOutlined style={{ fontSize: 48, color: 'rgba(255, 255, 255, 0.3)' }} />
+                        <p style={{ marginTop: 15, color: 'rgba(255, 255, 255, 0.7)', textAlign: 'center' }}>
+                            将节点拖拽到画布区域即可使用
+                        </p>
+                    </div>
+                </div>
+            </Modal>
             {false && (<Drawer
                 title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

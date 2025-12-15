@@ -614,14 +614,14 @@ body {
 .app-header {
   /* 悬浮定位 */
   position: fixed !important;
-  top: 24px;
+  top: 5px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
 
   /* 尺寸与形状 */
   height: 56px !important;
-  width: 1000px !important;
+  width: 1200px !important;
   min-width: 420px;
   padding: 6px !important;
   border-radius: 100px !important;
@@ -686,4 +686,445 @@ body {
   align-items: center;
   justify-content: center;
   color: #888;
+}
+
+/* === 全局和画布区域深色重构 - 第一步最终修正 === */
+
+/* 1. 全局 body/container 样式 (覆盖文件顶部原有样式) */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background-color: #121212 !important; /* 全局背景改为深色 */
+  color: #f0f0f0; /* 全局文字颜色改为浅色 */
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #121212 !important; /* 确保容器也是深色 */
+    background-image: none !important; /* 移除原来的 iOS 渐变 */
+    color: #f0f0f0; 
+}
+
+/* 2. 主内容区：调整为居中容器 (覆盖原有样式) */
+.app-content {
+    flex: 1;
+    display: flex;
+    justify-content: center; /* 关键：水平居中内容 */
+    align-items: flex-start; /* 内容从顶部开始 */
+    
+    padding: 0 !important; /* 移除外层 padding，由内部容器控制 */
+    padding-top: 100px !important; 
+    
+    gap: 0 !important; /* 移除原有间距 */
+    overflow: hidden;
+    height: 100vh;
+    box-sizing: border-box;
+    position: relative; /* 确保内部元素的 z-index 可用 */
+}
+
+/* 画布视图外层容器：为 100% 高度提供锚点 */
+.canvas-view-wrapper {
+    height: 100%;
+    position: relative;
+}
+
+/* 可选：顶部背景光晕（不影响交互） */
+.canvas-bg-glow-top {
+    position: absolute;
+    top: -220px;
+    left: 50%;
+    width: 900px;
+    height: 520px;
+    transform: translateX(-50%);
+    background: radial-gradient(circle at center, rgba(255, 99, 99, 0.18), rgba(255, 99, 99, 0) 70%);
+    filter: blur(24px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* 新增：画布工作区居中容器 */
+.canvas-workspace-centered {
+    width: 1300px; /* 定义整个工作区的最大宽度 */
+    max-width: 95%; /* 保证响应式 */
+    height: 100%;
+    
+    display: flex;
+    gap: 24px; /* 恢复左侧面板和画布之间的间距 */
+    padding: 0 0 24px 0; /* 底部和侧边留出空间 */
+    
+    position: relative; 
+    z-index: 2;
+}
+
+/* 3. 画布容器 (Canvas) 自身：深色玻璃卡片 (覆盖原有样式) */
+.canvas-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    
+    /* 核心磨砂效果 - 深色玻璃卡片 */
+    background: rgba(22, 22, 22, 0.9) !important; 
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    
+    border-radius: 18px !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* 4. ReactFlow 内部元素 (颜色调和) */
+.react-flow__background {
+    background-color: #1a1a1a !important; /* 画布背景改为柔和的深灰色 */
+    background-image: radial-gradient(#3a3a3a 1px, transparent 1px), radial-gradient(#3a3a3a 1px, transparent 1px) !important;
+    background-size: 20px 20px, 20px 20px !important;
+}
+.react-flow__controls {
+    /* 控件背景适应深色外壳 */
+    background: rgba(255, 255, 255, 0.05) !important; 
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    box-shadow: none !important;
+}
+.react-flow__controls-button {
+    color: #f0f0f0 !important;
+}
+
+/* 节点组件内部文字颜色修正 */
+.react-flow__node div {
+    color: #1D1D1F !important; 
+}
+/* 确保结果浮层的表格背景适应暗色 */
+.result-floating-panel .ant-table-wrapper {
+    background: rgba(255, 255, 255, 0.95) !important;
+}
+
+/* === 左侧面板深色重构 - 第二步：左侧卡片与元素 === */
+
+/* 1. 左侧面板布局容器: 保持 flex-direction: column; */
+.left-panel {
+    width: 360px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+    padding-right: 4px;
+    
+    background: transparent !important; /* 依赖全局深色背景 */
+}
+
+/* 2. 组件库入口卡片和通用深色卡片样式 (ios-card) */
+.ios-card, .node-library-modal-body {
+    /* 核心磨砂效果 */
+    background: rgba(22, 22, 22, 0.95) !important;
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid rgba(255, 255, 255, 0.12); /* 亮色描边 */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); /* 深色阴影 */
+    color: #f0f0f0; /* 卡片内文字变白 */
+    overflow: hidden;
+}
+
+/* 3. 拖拽节点 (draggable-node)：适配深色卡片 */
+.draggable-node {
+    background: rgba(255, 255, 255, 0.08) !important; /* 节点底色变浅 */
+    color: rgba(255, 255, 255, 0.9) !important; 
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.draggable-node:hover {
+    background: rgba(255, 255, 255, 0.15) !important;
+    box-shadow: none; 
+}
+.draggable-node div:last-child {
+    color: rgba(255, 255, 255, 0.4) !important; /* 描述文字变浅 */
+}
+
+/* 4. 文件上传和列表适配 (确保卡片内元素颜色正确) */
+.ant-upload.ant-upload-drag {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 2px dashed rgba(255, 255, 255, 0.3) !important;
+}
+.ant-upload.ant-upload-drag:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+.file-manager-section .ant-list-item {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.8) !important;
+}
+.file-manager-section .ant-list-item-meta-title a {
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* 5. 模态框样式：应用深色磨砂背景和浅色标题 */
+.ant-modal-content {
+    background: rgba(22, 22, 22, 0.95) !important;
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.ant-modal-header {
+    background: transparent !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    padding-bottom: 16px;
+}
+.ant-modal-title {
+    color: #f0f0f0 !important;
+    font-weight: 600;
+}
+.ant-modal-close-x {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* 6. 节点列表标题颜色适配 (覆盖 Ant Design 默认) */
+.ant-collapse-header,
+.left-panel div[style*="font-size: 13px"],
+.left-panel div[style*="font-size: 12px"] {
+    color: rgba(255, 255, 255, 0.8) !important; 
+}
+.ant-collapse {
+    background: transparent !important;
+    border: none !important;
+}
+.ant-collapse-item {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 7. 允许拖拽到画布：Modal 外部区域不拦截指针事件 */
+.node-library-modal-wrapper {
+    pointer-events: none;
+}
+.node-library-modal-wrapper .ant-modal {
+    pointer-events: auto;
+}
+
+/* === 文件管理区域 深色适配 === */
+
+/* 1. 文件上传区域 */
+.ant-upload.ant-upload-drag {
+    /* 覆盖亮色背景和边框，适配深色卡片 */
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 2px dashed rgba(255, 255, 255, 0.3) !important;
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.ant-upload.ant-upload-drag:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* 2. 文件列表项 (FileManager) */
+/* 覆盖原有的浅色列表项样式 */
+.file-manager-list .ant-list-item,
+.left-panel .ant-list-item,
+.file-item {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.8) !important;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    padding: 12px !important;
+}
+.file-manager-list .ant-list-item:hover,
+.left-panel .ant-list-item:hover,
+.file-item:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+.file-manager-list .ant-list-item-meta-title a,
+.left-panel .ant-list-item-meta-title a {
+    color: rgba(255, 255, 255, 0.9) !important; /* 文件名标题颜色 */
+}
+.file-manager-list .ant-list-item-action,
+.left-panel .ant-list-item-action {
+    color: rgba(255, 255, 255, 0.4) !important; /* 删除图标颜色 */
+}
+
+/* 选中项 (如果存在) */
+.file-item-selected {
+    background: rgba(0, 122, 255, 0.2) !important; /* 蓝色选中背景 */
+    border-color: rgba(0, 122, 255, 0.5) !important;
+}
+
+/* 3. 输入框/选择器 (如果 Ant Design 元素在卡片内) */
+/* 强制 Ant Design 输入框和选择器背景透明或深色 */
+.ios-card .ant-input,
+.ios-card .ant-select-selector {
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: #f0f0f0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+.ios-card .ant-input:focus,
+.ios-card .ant-input-focused,
+.ios-card .ant-select-focused .ant-select-selector,
+.ios-card .ant-select-selector:focus {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2) !important;
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* === 文件资源区域：深色背景上的白色卡片风格 === */
+.file-manager-section .file-manager-title {
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* 上分区：上传卡片 */
+.file-manager-section .file-upload-card {
+    background: rgba(255, 255, 255, 0.98) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
+    padding: 18px !important;
+}
+.file-manager-section .ant-upload.ant-upload-drag {
+    background: transparent !important;
+    border: none !important;
+    color: rgba(0, 0, 0, 0.45) !important;
+}
+.file-manager-section .ant-upload.ant-upload-drag:hover {
+    background: transparent !important;
+    border: none !important;
+}
+.file-manager-section .ant-upload-drag-icon {
+    margin-bottom: 8px !important;
+}
+.file-manager-section .ant-upload-text {
+    color: rgba(0, 0, 0, 0.45) !important;
+}
+
+/* 下分区：文件列表（容器透明 + 列表项白卡片） */
+.file-manager-section .file-list-card {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 18px !important;
+    box-shadow: none !important;
+}
+.file-manager-section .file-manager-list .ant-list-item {
+    background: rgba(255, 255, 255, 0.98) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 14px !important;
+    padding: 14px 16px !important;
+    margin: 10px 0 !important;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28) !important;
+}
+.file-manager-section .file-manager-list .ant-list-item-meta-title a {
+    color: rgba(0, 0, 0, 0.88) !important;
+}
+.file-manager-section .file-manager-list .ant-list-item-action {
+    color: rgba(0, 0, 0, 0.35) !important;
+}
+
+/* === 拖拽节点平铺样式适配 === */
+.draggable-node {
+    padding: 10px !important;
+    margin-bottom: 0px !important;
+    display: flex !important;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+.draggable-node .draggable-node-icon {
+    margin-bottom: 2px;
+}
+.draggable-node div:nth-child(2) {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+.draggable-node div:last-child {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4) !important;
+    margin-top: 2px;
+}
+
+/* === 文件管理区域 最终深色磨砂适配 === */
+
+/* 额外：移除文件资源白卡片外壳，让内部元素直接玻璃化 */
+.file-manager-section .file-upload-card,
+.file-manager-section .file-list-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* 1. 文件上传区域 (ant-upload-drag) - 变为玻璃状 */
+.file-manager .ant-upload.ant-upload-drag {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border: 2px dashed rgba(255, 255, 255, 0.25) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+    border-radius: 16px !important;
+}
+.file-manager .ant-upload.ant-upload-drag .ant-upload-drag-icon .anticon {
+    color: #FF6363 !important;
+}
+
+.file-manager .ant-upload.ant-upload-drag:hover {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* 2. 文件列表项 (ant-list-item) - 变为玻璃状 */
+.file-manager .file-manager-list .ant-list-item,
+.file-manager .file-item {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    color: rgba(255, 255, 255, 0.9) !important;
+    margin-bottom: 8px !important;
+    border-radius: 12px !important;
+    padding: 12px 16px !important;
+    transition: all 0.2s;
+}
+.file-manager .file-manager-list .ant-list-item:hover,
+.file-manager .file-item:hover {
+    background: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* 3. 列表项内部文字和图标颜色 */
+.file-manager .file-manager-list .ant-list-item-meta-title a {
+    color: rgba(255, 255, 255, 0.95) !important;
+}
+.file-manager .file-manager-list .ant-list-item-meta-description {
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+.file-manager .file-manager-list .ant-list-item-action {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+.file-manager .file-manager-list .ant-list-item-action .anticon {
+    color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* === 组件库入口卡片最终美化 === */
+
+/* 1. 核心 ios-card 样式 (确保背景是深色玻璃) */
+.left-panel .ios-card {
+    background: rgba(22, 22, 22, 0.95) !important;
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    color: #f0f0f0 !important;
+    border-radius: 18px !important;
+    overflow: hidden;
+}
+
+/* 2. 组件库入口卡片内容样式 (确保文字显眼且卡片延伸) */
+.left-panel .ios-card .card-content {
+    padding: 40px 20px 40px 20px !important;
+    text-align: center;
+}
+
+/* 3. 标题和描述文字颜色调整为白色显眼 */
+.left-panel .ios-card .card-content div {
+    color: #FFFFFF !important;
+}
+
+/* 4. 确保图标颜色显眼 */
+.left-panel .ios-card .card-content .anticon {
+    color: #FF6363 !important;
+}
+
+/* 5. 描述文字稍微透明一点 */
+.left-panel .ios-card .card-content div[style*="font-size: 12px"] {
+    color: rgba(255, 255, 255, 0.7) !important;
 }
