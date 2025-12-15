@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     Layout, Typography, Button, Upload, message, Input, Card,
     List, Tag, Spin, Modal, Table, Space, Tooltip, Empty,
@@ -11,6 +11,7 @@ import {
     DeleteOutlined, EyeOutlined, DownloadOutlined,
     RobotOutlined, ThunderboltOutlined, DragOutlined,
     SettingOutlined, PlusOutlined, DatabaseOutlined,
+    MinusOutlined,
     FilterOutlined, MergeCellsOutlined, CalculatorOutlined,
     GroupOutlined, ExportOutlined, SelectOutlined,
     AppstoreOutlined, BuildOutlined, CheckCircleOutlined,
@@ -201,6 +202,8 @@ const NODE_TYPES_CONFIG = {
 
 // 节点分类
 const NODE_CATEGORIES = {
+    preset: { label: '预设', icon: <ThunderboltOutlined />, color: '#AF52DE' },
+    custom: { label: '自定义', icon: <ProfileOutlined />, color: '#5AC8FA' },
     source: { label: '数据源', icon: <DatabaseOutlined />, color: '#34C759' },
     transform: { label: '数据清洗', icon: <FilterOutlined />, color: '#007AFF' },
     analytics: { label: '数据分析', icon: <BarChartOutlined />, color: '#FF9500' },
@@ -342,6 +345,58 @@ function DraggableNode({ type, config, onDragStart, onAddNode }) {
     );
 }
 
+const PRESET_WORKFLOWS = [
+    {
+        id: 'preset_1',
+        name: '1',
+        description: 'Excel读取 → 输出',
+        config: {
+            nodes: [
+                { id: 'n1', type: 'source', label: 'Excel读取', config: {} },
+                { id: 'n2', type: 'output', label: '输出Excel', config: {} }
+            ],
+            edges: [{ source: 'n1', target: 'n2' }]
+        }
+    },
+    {
+        id: 'preset_2',
+        name: '2',
+        description: 'Excel读取 → 数据清洗 → 输出',
+        config: {
+            nodes: [
+                { id: 'n1', type: 'source', label: 'Excel读取', config: {} },
+                { id: 'n2', type: 'transform', label: '数据清洗', config: {} },
+                { id: 'n3', type: 'output', label: '输出Excel', config: {} }
+            ],
+            edges: [
+                { source: 'n1', target: 'n2' },
+                { source: 'n2', target: 'n3' }
+            ]
+        }
+    }
+];
+
+function DraggableWorkflow({ workflow, kind }) {
+    const onDragStartInternal = (event) => {
+        const payload = kind === 'saved'
+            ? { kind: 'saved', workflow_id: workflow?.id, name: workflow?.name }
+            : { kind: 'preset', id: workflow?.id, name: workflow?.name, config: workflow?.config };
+
+        event.dataTransfer.setData('application/excelflow-workflow', JSON.stringify(payload));
+        event.dataTransfer.effectAllowed = 'copy';
+    };
+
+    return (
+        <div className="draggable-node" draggable onDragStart={onDragStartInternal}>
+            <div className="draggable-node-icon" style={{ background: '#AF52DE', boxShadow: `0 2px 8px #AF52DE40` }}>
+                <ThunderboltOutlined />
+            </div>
+            <div>{workflow?.name || '工作流'}</div>
+            <div>{workflow?.description || ''}</div>
+        </div>
+    );
+}
+
 // === 节点工具箱组件 ===
 // === 文件管理组件 ===
 function FileManager({ files, onUpload, onDelete, onPreview }) {
@@ -406,25 +461,74 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
 }
 
 // === 节点工具箱组件 ===
-function NodeToolbox({ onDragStart, onAddNode }) {
+function NodeToolbox({ onDragStart, onAddNode, savedWorkflows }) {
+    const categoryKeys = Object.keys(NODE_CATEGORIES);
+    const customWorkflows = Array.isArray(savedWorkflows) ? savedWorkflows : [];
+
     return (
-        <div style={{ paddingRight: 4 }}>
+        <Collapse
+            ghost
+            bordered={false}
+            defaultActiveKey={categoryKeys}
+            expandIconPosition="end"
+            expandIcon={({ isActive }) => (
+                isActive
+                    ? <MinusOutlined style={{ color: '#1D1D1F', fontSize: 14 }} />
+                    : <PlusOutlined style={{ color: '#1D1D1F', fontSize: 14 }} />
+            )}
+            style={{ background: 'transparent' }}
+        >
             {Object.entries(NODE_CATEGORIES).map(([catKey, cat]) => (
-                <div key={catKey} style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: cat.color, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {cat.icon}
-                        {cat.label}
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: 5 }}>
-                        {Object.entries(NODE_TYPES_CONFIG)
-                            .filter(([_, cfg]) => cfg.category === catKey)
-                            .map(([type, config]) => (
-                                <DraggableNode key={type} type={type} config={config} onDragStart={onDragStart} onAddNode={onAddNode} />
+                <Panel
+                    key={catKey}
+                    header={
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#1D1D1F', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: cat.color, display: 'inline-flex', alignItems: 'center' }}>{cat.icon}</span>
+                            <span>{cat.label}</span>
+                        </div>
+                    }
+                    style={{ background: 'transparent' }}
+                >
+                    {catKey === 'preset' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            {PRESET_WORKFLOWS.map(wf => (
+                                <DraggableWorkflow key={wf.id} workflow={wf} kind="preset" />
                             ))}
-                    </div>
-                </div>
+                        </div>
+                    )}
+
+                    {catKey === 'custom' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            {customWorkflows.length === 0 ? (
+                                <div style={{ fontSize: 12, color: '#86868B', padding: '6px 2px' }}>
+                                    暂无自定义工作流
+                                </div>
+                            ) : (
+                                customWorkflows.map(wf => (
+                                    <DraggableWorkflow key={wf.id} workflow={wf} kind="saved" />
+                                ))
+                            )}
+                        </div>
+                    )}
+
+                    {catKey !== 'preset' && catKey !== 'custom' && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {Object.entries(NODE_TYPES_CONFIG)
+                                .filter(([_, cfg]) => cfg.category === catKey)
+                                .map(([type, config]) => (
+                                    <DraggableNode
+                                        key={type}
+                                        type={type}
+                                        config={config}
+                                        onDragStart={onDragStart}
+                                        onAddNode={onAddNode}
+                                    />
+                                ))}
+                        </div>
+                    )}
+                </Panel>
             ))}
-        </div>
+        </Collapse>
     );
 }
 
@@ -444,6 +548,10 @@ function App() {
     const [previewSheetName, setPreviewSheetName] = useState(null); // 预览的Sheet名
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [workflowName, setWorkflowName] = useState('');
+    const [workflowDescription, setWorkflowDescription] = useState('');
+    const [savingWorkflow, setSavingWorkflow] = useState(false);
+    const [topToast, setTopToast] = useState({ open: false, text: '' });
+    const topToastTimerRef = useRef(null);
 
     const [selectedNode, setSelectedNode] = useState(null);
     const [showNodeConfig, setShowNodeConfig] = useState(false);
@@ -462,6 +570,142 @@ function App() {
     const [chatInput, setChatInput] = useState(''); // 用户输入
     const [chatLoading, setChatLoading] = useState(false); // 对话加载中
     const [chatStatus, setChatStatus] = useState(''); // clarifying / confirmed
+
+    // ============ AI灵动岛：会话历史（本地） ============
+    const ISLAND_CHAT_HISTORY_KEY = 'ai_island_chat_history_v1';
+    const ISLAND_CHAT_ACTIVE_KEY = 'ai_island_chat_active_v1';
+
+    const [islandChatThreads, setIslandChatThreads] = useState([]); // [{local_id,title,session_id,messages,selected_tables,chat_status,created_at,updated_at}]
+    const [activeIslandThreadId, setActiveIslandThreadId] = useState(null);
+
+    const chatAbortControllerRef = useRef(null);
+
+    const abortChatRequest = () => {
+        try {
+            chatAbortControllerRef.current?.abort?.();
+        } catch { }
+        chatAbortControllerRef.current = null;
+    };
+
+    const createChatAbortSignal = () => {
+        abortChatRequest();
+        const controller = new AbortController();
+        chatAbortControllerRef.current = controller;
+        return controller.signal;
+    };
+
+    const isCanceledRequest = (error) => {
+        return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.message === 'canceled';
+    };
+
+    const createIslandThreadId = () => {
+        if (globalThis?.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+        return `thread_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    };
+
+    const buildIslandThreadTitle = (msgs) => {
+        const list = Array.isArray(msgs) ? msgs : [];
+        const firstUser = list.find(m => m?.role === 'user' && typeof m?.content === 'string' && m.content.trim());
+        const text = (firstUser?.content || '').trim();
+        if (!text) return '新对话';
+        return text.length > 18 ? `${text.slice(0, 18)}…` : text;
+    };
+
+    const getIslandGreetingMessage = () => ({
+        role: 'assistant',
+        content: [
+            '你好！我是小助手。',
+            '你可以先选择要分析的 Sheet（可选），然后直接告诉我你想查询/分析什么。',
+            '也可以直接问我：你可以干什么？'
+        ].join('\n')
+    });
+
+    const upsertIslandThread = (prev, nextThread) => {
+        const threads = Array.isArray(prev) ? [...prev] : [];
+        const idx = threads.findIndex(t => t?.local_id === nextThread.local_id);
+        if (idx >= 0) threads[idx] = { ...threads[idx], ...nextThread };
+        else threads.unshift(nextThread);
+        threads.sort((a, b) => (b?.updated_at || 0) - (a?.updated_at || 0));
+        return threads.slice(0, 30);
+    };
+
+    const loadIslandThread = (thread) => {
+        if (!thread?.local_id) return;
+        abortChatRequest();
+        setActiveIslandThreadId(thread.local_id);
+        setChatSessionId(thread.session_id || null);
+        setChatMessages(Array.isArray(thread.messages) ? thread.messages : []);
+        setChatSelectedTables(Array.isArray(thread.selected_tables) ? thread.selected_tables : []);
+        setChatStatus(thread.chat_status || '');
+        setChatLoading(false);
+    };
+
+    // 启动时：读取本地历史，并恢复上次会话（如果存在）
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(ISLAND_CHAT_HISTORY_KEY);
+            const stored = raw ? JSON.parse(raw) : [];
+            const threads = Array.isArray(stored) ? stored : [];
+            setIslandChatThreads(threads);
+
+            const activeId = localStorage.getItem(ISLAND_CHAT_ACTIVE_KEY);
+            const activeThread = threads.find(t => t?.local_id === activeId);
+            if (activeThread) {
+                loadIslandThread(activeThread);
+                return;
+            }
+
+            setChatSessionId(null);
+            setChatStatus('');
+            setChatMessages([getIslandGreetingMessage()]);
+            setActiveIslandThreadId(createIslandThreadId());
+        } catch (e) {
+            console.warn('[AI-Island] load chat history failed:', e);
+            setChatSessionId(null);
+            setChatStatus('');
+            setChatMessages([getIslandGreetingMessage()]);
+            setActiveIslandThreadId(createIslandThreadId());
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // 同步：把当前会话快照写入历史（作为“可切换的会话”）
+    useEffect(() => {
+        if (!activeIslandThreadId) return;
+        const now = Date.now();
+        setIslandChatThreads(prev => {
+            const existing = (Array.isArray(prev) ? prev : []).find(t => t?.local_id === activeIslandThreadId);
+            const createdAt = existing?.created_at || now;
+            return upsertIslandThread(prev, {
+                local_id: activeIslandThreadId,
+                title: buildIslandThreadTitle(chatMessages),
+                session_id: chatSessionId || null,
+                messages: Array.isArray(chatMessages) ? chatMessages : [],
+                selected_tables: Array.isArray(chatSelectedTables) ? chatSelectedTables : [],
+                chat_status: chatStatus || '',
+                created_at: createdAt,
+                updated_at: now
+            });
+        });
+    }, [activeIslandThreadId, chatMessages, chatSelectedTables, chatSessionId, chatStatus]);
+
+    // 持久化历史 + 当前会话指针
+    useEffect(() => {
+        try {
+            localStorage.setItem(ISLAND_CHAT_HISTORY_KEY, JSON.stringify(islandChatThreads));
+        } catch (e) {
+            console.warn('[AI-Island] persist chat history failed:', e);
+        }
+    }, [islandChatThreads]);
+
+    useEffect(() => {
+        if (!activeIslandThreadId) return;
+        try {
+            localStorage.setItem(ISLAND_CHAT_ACTIVE_KEY, activeIslandThreadId);
+        } catch (e) {
+            console.warn('[AI-Island] persist active chat failed:', e);
+        }
+    }, [activeIslandThreadId]);
 
     // ============ 执行状态可视化 ============
     const [nodeExecutionStatus, setNodeExecutionStatus] = useState({}); // {nodeId: 'pending'|'running'|'success'|'error'}
@@ -644,7 +888,7 @@ function App() {
         console.log('[DragDrop] onDragOver triggered');
     }, []);
 
-    const onDrop = useCallback((event) => {
+    const onDrop = useCallback(async (event) => {
         event.preventDefault();
         console.log('[DragDrop] onDrop triggered');
         console.log('[DragDrop] reactFlowWrapper.current:', reactFlowWrapper.current);
@@ -657,6 +901,52 @@ function App() {
         if (!reactFlowInstance) {
             console.error('[DragDrop] ERROR: reactFlowInstance is null!');
             return;
+        }
+
+        const workflowRaw = event.dataTransfer.getData('application/excelflow-workflow');
+        if (workflowRaw) {
+            try {
+                const payload = JSON.parse(workflowRaw);
+
+                const applyWorkflowConfig = (workflowConfig) => {
+                    const { nodes: flowNodes, edges: flowEdges } = workflowToReactFlow(workflowConfig);
+                    if (!Array.isArray(flowNodes) || flowNodes.length === 0) {
+                        message.warning('工作流为空或格式不正确');
+                        return;
+                    }
+                    setNodes(flowNodes);
+                    setEdges(Array.isArray(flowEdges) ? flowEdges : []);
+                    setResult(null);
+
+                    requestAnimationFrame(() => {
+                        try {
+                            reactFlowInstance?.fitView?.({ padding: 0.2, duration: 300 });
+                        } catch (e) {
+                            console.warn('[DragDrop] fitView failed:', e);
+                        }
+                    });
+                };
+
+                if (payload?.kind === 'preset' && payload?.config) {
+                    applyWorkflowConfig(payload.config);
+                    message.success(`已加载预设工作流：${payload.name || payload.id || ''}`.trim());
+                    return;
+                }
+
+                if (payload?.kind === 'saved' && payload?.workflow_id) {
+                    const workflowData = await workflowApi.get(payload.workflow_id);
+                    applyWorkflowConfig(workflowData?.config);
+                    message.success(`已加载自定义工作流：${payload.name || payload.workflow_id}`);
+                    return;
+                }
+
+                message.warning('无法识别的工作流拖拽数据');
+                return;
+            } catch (e) {
+                console.error('[DragDrop] workflow drop failed:', e);
+                message.error('工作流加载失败：数据解析错误');
+                return;
+            }
         }
 
         const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
@@ -703,7 +993,7 @@ function App() {
         setConfigSheet(null);
         setShowNodeConfig(true);
         console.log('[DragDrop] Node created successfully');
-    }, [reactFlowInstance, setNodes]);
+    }, [reactFlowInstance, setNodes, setEdges, setResult]);
 
     const addNodeFromLibrary = useCallback((type, config) => {
         if (!reactFlowWrapper.current) {
@@ -809,6 +1099,20 @@ function App() {
             }
         };
         init();
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (topToastTimerRef.current) clearTimeout(topToastTimerRef.current);
+        };
+    }, []);
+
+    const showTopGlassToast = useCallback((text) => {
+        if (topToastTimerRef.current) clearTimeout(topToastTimerRef.current);
+        setTopToast({ open: true, text: String(text || '') });
+        topToastTimerRef.current = setTimeout(() => {
+            setTopToast({ open: false, text: '' });
+        }, 3000);
     }, []);
 
     const handleUpload = async ({ file }) => {
@@ -981,6 +1285,71 @@ function App() {
         }
     };
 
+    const buildWorkflowConfigForSave = useCallback(() => {
+        const sanitizeNodeData = (data) => {
+            const safe = data && typeof data === 'object' ? data : {};
+            return {
+                type: safe.type,
+                label: safe.label,
+                description: safe.description,
+                config: safe.config || {}
+            };
+        };
+
+        const safeNodes = (Array.isArray(nodes) ? nodes : []).map((n) => ({
+            id: n.id,
+            type: n.type || 'custom',
+            position: n.position,
+            data: sanitizeNodeData(n.data)
+        }));
+
+        const safeEdges = (Array.isArray(edges) ? edges : []).map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            type: e.type,
+            animated: e.animated,
+            style: e.style,
+            markerEnd: e.markerEnd
+        }));
+
+        return { nodes: safeNodes, edges: safeEdges };
+    }, [nodes, edges]);
+
+    const handleCanvasSaveClick = useCallback(() => {
+        if (!nodes || nodes.length === 0) {
+            showTopGlassToast('暂无可用工作流，请先绘制出想要的工作流');
+            return;
+        }
+        setShowSaveModal(true);
+    }, [nodes, showTopGlassToast]);
+
+    const handleConfirmSaveWorkflow = useCallback(async () => {
+        const name = String(workflowName || '').trim();
+        if (!name) {
+            message.warning('请输入自定义名称');
+            return;
+        }
+
+        setSavingWorkflow(true);
+        try {
+            const config = buildWorkflowConfigForSave();
+            await workflowApi.save(name, String(workflowDescription || ''), config);
+
+            const workflowData = await workflowApi.getList();
+            setSavedWorkflows(workflowData.workflows || []);
+
+            message.success('工作流已保存');
+            setShowSaveModal(false);
+            setWorkflowName('');
+            setWorkflowDescription('');
+        } catch (e) {
+            message.error('保存失败: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+        } finally {
+            setSavingWorkflow(false);
+        }
+    }, [workflowName, workflowDescription, buildWorkflowConfigForSave]);
+
     // 查看节点执行结果
     const handleViewNodeResult = useCallback((nodeId) => {
         const result = nodeResults[nodeId];
@@ -1007,6 +1376,8 @@ function App() {
         console.log('[AI-Chat] 获取可选表列表:', files.length);
         const tables = [];
         files.forEach(file => {
+            const fileId = getFileId(file);
+            if (!fileId) return;
             let sheets = file.sheets;
             if (typeof sheets === 'string') {
                 try { sheets = JSON.parse(sheets); } catch { sheets = []; }
@@ -1014,8 +1385,8 @@ function App() {
             if (Array.isArray(sheets)) {
                 sheets.forEach(sheet => {
                     tables.push({
-                        key: `${file.file_id}::${sheet.name}`,
-                        file_id: file.file_id,
+                        key: `${fileId}::${sheet.name}`,
+                        file_id: fileId,
                         filename: file.filename,
                         sheet_name: sheet.name,
                         columns: sheet.columns || [],
@@ -1027,6 +1398,8 @@ function App() {
         console.log('[AI-Chat] 可选表数量:', tables.length);
         return tables;
     };
+
+    const availableTablesForIsland = useMemo(() => getAvailableTables(), [files]);
 
     const extractJsonCodeBlock = (content) => {
         if (typeof content !== 'string') return null;
@@ -1339,21 +1712,26 @@ function App() {
     };
 
     // 开始对话（并可选发送第一句话）
-    const startChat = async (initialMessage) => {
-        if (!chatSelectedTables || chatSelectedTables.length === 0) {
+    const startChat = async (initialMessage, tableKeysOverride) => {
+        const tableKeys = (Array.isArray(tableKeysOverride) && tableKeysOverride.length > 0)
+            ? tableKeysOverride
+            : chatSelectedTables;
+
+        if (!tableKeys || tableKeys.length === 0) {
             message.warning('请先选择要处理的表（或先上传包含 Sheet 的文件）');
             return null;
         }
 
         setChatLoading(true);
+        const signal = createChatAbortSignal();
 
         try {
-            const selectedFiles = chatSelectedTables.map(key => {
+            const selectedFiles = tableKeys.map(key => {
                 const [file_id, sheet_name] = key.split('::');
                 return { file_id, sheet_name };
             });
 
-            const startResult = await aiApi.chatStart(selectedFiles);
+            const startResult = await aiApi.chatStart(selectedFiles, { signal });
             setChatSessionId(startResult.session_id);
             setChatMessages([{ role: 'assistant', content: startResult.message }]);
             setChatStatus(startResult.status || '');
@@ -1362,7 +1740,7 @@ function App() {
             if (!firstMsg) return startResult;
 
             setChatMessages(prev => [...prev, { role: 'user', content: firstMsg }]);
-            const followUp = await aiApi.chatMessage(startResult.session_id, firstMsg);
+            const followUp = await aiApi.chatMessage(startResult.session_id, firstMsg, { signal });
             setChatMessages(prev => [...prev, { role: 'assistant', content: followUp.message }]);
 
             if (containsWorkflowJson(followUp.message)) setChatStatus('workflow_ready');
@@ -1370,6 +1748,7 @@ function App() {
 
             return startResult;
         } catch (error) {
+            if (isCanceledRequest(error)) return null;
             console.error('[AI-Chat] startChat failed:', error);
             message.error('开始对话失败: ' + (error.response?.data?.detail || error.message));
             return null;
@@ -1389,24 +1768,57 @@ function App() {
                 return;
             }
             if (tables !== chatSelectedTables) setChatSelectedTables(tables);
-            await startChat(userMsg);
+            await startChat(userMsg, tables);
             return;
         }
 
         setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
         setChatLoading(true);
+        const signal = createChatAbortSignal();
 
         try {
-            const result = await aiApi.chatMessage(chatSessionId, userMsg);
+            const result = await aiApi.chatMessage(chatSessionId, userMsg, { signal });
             setChatMessages(prev => [...prev, { role: 'assistant', content: result.message }]);
 
             if (containsWorkflowJson(result.message)) setChatStatus('workflow_ready');
             else setChatStatus(result.status || '');
         } catch (error) {
+            if (isCanceledRequest(error)) return;
             console.error('[AI-Chat] handleIslandSend failed:', error);
             message.error('发送失败: ' + (error.response?.data?.detail || error.message));
         } finally {
             setChatLoading(false);
+        }
+    };
+
+    const handleIslandNewChat = () => {
+        abortChatRequest();
+        setChatSessionId(null);
+        setChatMessages([getIslandGreetingMessage()]);
+        setChatStatus('');
+        setChatLoading(false);
+        setActiveIslandThreadId(createIslandThreadId());
+    };
+
+    const handleIslandSelectThread = (threadId) => {
+        if (!threadId || threadId === activeIslandThreadId) return;
+        const thread = islandChatThreads.find(t => t?.local_id === threadId);
+        if (!thread) return;
+        loadIslandThread(thread);
+    };
+
+    const handleIslandStop = () => {
+        abortChatRequest();
+        setChatLoading(false);
+    };
+
+    const handleIslandDeleteConversation = (threadId) => {
+        if (!threadId) return;
+
+        setIslandChatThreads(prev => (Array.isArray(prev) ? prev.filter(t => t?.local_id !== threadId) : []));
+
+        if (threadId === activeIslandThreadId) {
+            handleIslandNewChat();
         }
     };
 
@@ -1419,9 +1831,10 @@ function App() {
 
         console.log('[AI-Chat] 确认生成工作流');
         setChatLoading(true);
+        const signal = createChatAbortSignal();
 
         try {
-            const result = await aiApi.chatGenerate(chatSessionId);
+            const result = await aiApi.chatGenerate(chatSessionId, { signal });
             console.log('[AI-Chat] 生成结果:', result);
 
             if (result.workflow) {
@@ -1465,6 +1878,7 @@ function App() {
                 message.success('🎉 工作流已生成！您可以继续对话进行修改。');
             }
         } catch (error) {
+            if (isCanceledRequest(error)) return;
             console.error('[AI-Chat] 生成工作流失败:', error);
             message.error('生成失败: ' + (error.response?.data?.detail || error.message));
         } finally {
@@ -2288,102 +2702,108 @@ function App() {
 
             <Content className="app-content">
                 {/* 画布视图 (Canvas) */}
-                <div
-                    className="canvas-view-wrapper"
-                    style={{ display: currentView === 'canvas' ? 'block' : 'none' }}
-                >
-                    <div className="canvas-bg-glow-top" />
+                {/* 画布视图 (Canvas) - 还原为原始全屏布局，并应用 Light/iOS 风格 */}
+                <div style={{ display: currentView === 'canvas' ? 'flex' : 'none', width: '100%', height: '100%', gap: 24, padding: 24, boxSizing: 'border-box', minHeight: 0 }}>
+                    <div className="left-panel" style={{ minHeight: 0 }}>
+                        {/* 文件资源区域 - Light/iOS 风格 */}
+                        <div className="ios-card file-manager-section" style={{ flex: '0 0 45%', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0, marginTop: 0, padding: 0 }}>
+                            <FileManager
+                                files={files}
+                                onUpload={handleUpload}
+                                onDelete={deleteFile}
+                                onPreview={(fid) => {
+                                    const f = files.find(x => getFileId(x) === fid);
+                                    if (f && f.sheets) {
+                                        const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
+                                        if (sheets.length > 0) handlePreview(fid, sheets[0].name);
+                                    }
+                                }}
+                            />
+                        </div>
 
-                    <div className="canvas-workspace-centered">
-                        <div className="left-panel">
-                            {/* 文件资源区域 */}
-                            <div className="file-manager-section" style={{ flex: '0 0 calc(30% + 60px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0, marginTop: 0 }}>
-                                <FileManager
-                                    files={files}
-                                    onUpload={handleUpload}
-                                    onDelete={deleteFile}
-                                    onPreview={(fid) => {
-                                        const f = files.find(x => getFileId(x) === fid);
-                                        if (f && f.sheets) {
-                                            const sheets = typeof f.sheets === 'string' ? JSON.parse(f.sheets) : f.sheets;
-                                            if (sheets.length > 0) handlePreview(fid, sheets[0].name);
-                                        }
-                                    }}
-                                />
+                        {/* 节点库 - 直接展示（不再使用 Modal），并按分类可折叠 */}
+                        <div className="ios-card" style={{ flex: '1 1 auto', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0, padding: 0 }}>
+                            <div style={{ padding: '14px 16px 0', fontSize: 13, fontWeight: 700, color: '#1D1D1F', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <AppstoreOutlined style={{ color: '#007AFF' }} />
+                                节点库
                             </div>
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 12px', minHeight: 0 }}>
+                                <NodeToolbox onDragStart={onDragStartHandler} onAddNode={addNodeFromLibrary} savedWorkflows={savedWorkflows} />
+                            </div>
+                        </div>
+                    </div>
 
-                            {/* 新的组件库入口卡片 - 替换原节点工具箱区域 */}
-                            <div
-                                className="ios-card"
-                                style={{ flex: '1 1 auto', cursor: 'pointer', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', marginTop: 16, minHeight: 0 }}
-                                onClick={() => setShowNodeLibrary(true)}
+                    {/* 画布容器 - 恢复 flex: 1 占据剩余空间 */}
+                    <div className="canvas-container">
+                        {/* Canvas 左上角：保存 */}
+                        <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 10 }}>
+                            <Button
+                                icon={<SaveOutlined />}
+                                onClick={handleCanvasSaveClick}
+                                style={{ backgroundColor: '#AF52DE', borderColor: '#AF52DE', color: 'white' }}
                             >
-                                <div className="card-content" style={{ textAlign: 'center', padding: '30px 20px' }}>
-                                    <AppstoreOutlined style={{ fontSize: 40, color: '#FF6363', marginBottom: 10 }} />
-                                    <div style={{ fontSize: 18, fontWeight: 700, color: '#f0f0f0' }}>组件库</div>
-                                    <div style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.5)', marginTop: 4 }}>点击打开所有流程节点</div>
-                                </div>
+                                保存
+                            </Button>
+                        </div>
+
+                        {/* Canvas 顶部按钮保持不变 */}
+                        <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
+                            <Space>
+                                <Button icon={<DeleteOutlined />} onClick={() => setNodes([])} style={{ backgroundColor: '#FF4D4F', borderColor: '#FF4D4F', color: 'white' }}>清空</Button>
+                                <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>执行</Button>
+                            </Space>
+                        </div>
+
+                        {/* ReactFlow 容器 */}
+                        <div style={{ width: '100%', height: '100%', padding: '30px', boxSizing: 'border-box' }}>
+                            <div ref={reactFlowWrapper} style={{ width: '100%', height: '100%' }}>
+                                <ReactFlow
+                                    nodes={nodes} edges={edges} onNodesChange={onNodesChange}
+                                    onEdgesChange={onEdgesChange} onConnect={onConnect}
+                                    onEdgeUpdate={onEdgeUpdate} onEdgeUpdateEnd={onEdgeUpdateEnd}
+                                    onNodeClick={onNodeClick} nodeTypes={nodeTypes}
+                                    snapToGrid={true}
+                                    snapGrid={[15, 15]}
+                                    minZoom={0.1}
+                                    maxZoom={1.5}
+                                    fitView
+                                    fitViewOptions={{ padding: 0.2 }}
+                                    onInit={setReactFlowInstance}
+                                    onDrop={onDrop} onDragOver={onDragOver}
+                                    style={{ width: '100%', height: '100%' }}
+                                    defaultEdgeOptions={{
+                                        type: 'smoothstep',
+                                        animated: true,
+                                        style: { stroke: '#b1b1b7', strokeWidth: 2 },
+                                        markerEnd: { type: MarkerType.ArrowClosed }
+                                    }}
+                                >
+                                    <Background variant="dots" color="#e5e5ea" gap={15} size={1} />
+                                    <Controls showInteractive={false} />
+                                    {nodes.length === 0 && (
+                                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
+                                            <AppstoreOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.5 }} />
+                                            <p>请使用 AI 助手开始对话，或从左侧"节点库"拖拽节点</p>
+                                        </div>
+                                    )}
+                                </ReactFlow>
                             </div>
                         </div>
 
-                        <div className="canvas-container">
-                            <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
-                                <Space>
-                                    <Button icon={<DeleteOutlined />} onClick={() => setNodes([])} style={{ backgroundColor: '#FF4D4F', borderColor: '#FF4D4F', color: 'white' }}>清空</Button>
-                                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>执行</Button>
-                                </Space>
-                            </div>
-
-                            <div style={{ width: '100%', height: '100%', padding: '30px', boxSizing: 'border-box' }}>
-                                <div ref={reactFlowWrapper} style={{ width: '100%', height: '100%' }}>
-                                    <ReactFlow
-                                        nodes={nodes} edges={edges} onNodesChange={onNodesChange}
-                                        onEdgesChange={onEdgesChange} onConnect={onConnect}
-                                        onEdgeUpdate={onEdgeUpdate} onEdgeUpdateEnd={onEdgeUpdateEnd}
-                                        onNodeClick={onNodeClick} nodeTypes={nodeTypes}
-                                        snapToGrid={true}
-                                        snapGrid={[15, 15]}
-                                        minZoom={0.1}
-                                        maxZoom={1.5}
-                                        fitView
-                                        fitViewOptions={{ padding: 0.2 }}
-                                        onInit={setReactFlowInstance}
-                                        onDrop={onDrop} onDragOver={onDragOver}
-                                        style={{ width: '100%', height: '100%' }}
-                                        defaultEdgeOptions={{
-                                            type: 'smoothstep',
-                                            animated: true,
-                                            style: { stroke: '#b1b1b7', strokeWidth: 2 },
-                                            markerEnd: { type: MarkerType.ArrowClosed }
-                                        }}
-                                    >
-                                        <Background variant="dots" color="#e5e5ea" gap={15} size={1} />
-                                        <Controls showInteractive={false} />
-                                        {nodes.length === 0 && (
-                                            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#86868B' }}>
-                                                <AppstoreOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.5 }} />
-                                                <p>请使用 AI 助手开始对话，或从"节点库"拖拽节点</p>
-                                            </div>
-                                        )}
-                                    </ReactFlow>
+                        {result && (
+                            <div className="result-floating-panel">
+                                <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontWeight: 600 }}>运行结果 ({result.total} 条)</span>
+                                    <Space>
+                                        <Button type="text" size="small" icon={<DownloadOutlined />} href={workflowApi.getDownloadUrl(result.outputFile)}>下载</Button>
+                                        <Button type="text" size="small" onClick={() => setResult(null)}>关闭</Button>
+                                    </Space>
+                                </div>
+                                <div style={{ flex: 1, overflow: 'auto' }}>
+                                    <Table dataSource={result.dataSource} columns={result.columns} pagination={false} size="small" sticky />
                                 </div>
                             </div>
-
-                            {result && (
-                                <div className="result-floating-panel">
-                                    <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <span style={{ fontWeight: 600 }}>运行结果 ({result.total} 条)</span>
-                                        <Space>
-                                            <Button type="text" size="small" icon={<DownloadOutlined />} href={workflowApi.getDownloadUrl(result.outputFile)}>下载</Button>
-                                            <Button type="text" size="small" onClick={() => setResult(null)}>关闭</Button>
-                                        </Space>
-                                    </div>
-                                    <div style={{ flex: 1, overflow: 'auto' }}>
-                                        <Table dataSource={result.dataSource} columns={result.columns} pagination={false} size="small" sticky />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
+                        )}
                     </div>
                 </div>
 
@@ -2415,7 +2835,18 @@ function App() {
                 )}
             </Content>
 
-            <Drawer title="配置节点" placement="right" width={400} onClose={() => setShowNodeConfig(false)} open={showNodeConfig} mask={false}
+            {topToast.open && (
+                <div className="glass-top-toast">{topToast.text}</div>
+            )}
+
+            <Drawer
+                title="配置节点"
+                placement="right"
+                width={400}
+                onClose={() => setShowNodeConfig(false)}
+                open={showNodeConfig}
+                mask={false}
+                rootClassName="node-config-drawer-glass"
                 extra={<Button type="primary" size="small" onClick={saveNodeConfig}>保存</Button>}>
                 <Form form={nodeForm} layout="vertical" className="node-config-form">
                     <Form.Item label="节点名称" name="_label" style={{ marginBottom: 24 }}>
@@ -2427,6 +2858,56 @@ function App() {
                     <Button block danger icon={<DeleteOutlined />} onClick={deleteSelectedNode}>删除节点</Button>
                 </div>
             </Drawer>
+
+            <Modal
+                open={showSaveModal}
+                onCancel={() => {
+                    if (savingWorkflow) return;
+                    setShowSaveModal(false);
+                }}
+                title={
+                    <span style={{ color: 'rgba(255,255,255,0.92)', fontWeight: 700 }}>保存工作流</span>
+                }
+                centered
+                width={640}
+                rootClassName="workflow-save-modal"
+                okText="保存"
+                cancelText="取消"
+                okButtonProps={{ loading: savingWorkflow, style: { backgroundColor: '#AF52DE', borderColor: '#AF52DE' } }}
+                onOk={handleConfirmSaveWorkflow}
+            >
+                {(() => {
+                    let previewText = '';
+                    try {
+                        previewText = JSON.stringify(buildWorkflowConfigForSave(), null, 2);
+                    } catch {
+                        previewText = '';
+                    }
+
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 600 }}>自定义名称：</div>
+                            <Input
+                                value={workflowName}
+                                onChange={(e) => setWorkflowName(e.target.value)}
+                                placeholder="例如：月度报表清洗"
+                                autoFocus
+                            />
+
+                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 600 }}>描述：</div>
+                            <Input.TextArea
+                                value={workflowDescription}
+                                onChange={(e) => setWorkflowDescription(e.target.value)}
+                                placeholder="简要描述这个工作流做什么"
+                                autoSize={{ minRows: 3, maxRows: 5 }}
+                            />
+
+                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: 600 }}>下面为组件预览：</div>
+                            <pre className="workflow-preview-code">{`\"\"\"\n${previewText}\n\"\"\"`}</pre>
+                        </div>
+                    );
+                })()}
+            </Modal>
 
             <Modal open={showPreview} onCancel={() => setShowPreview(false)} footer={null} width={1100} title="预览数据" centered styles={{ body: { padding: 0 } }}>
                 {previewFileId && (() => {
@@ -2506,32 +2987,20 @@ function App() {
                 loading={chatLoading}
                 onSend={handleIslandSend}
                 onApplyWorkflow={handleApplyWorkflow}
+                onNewChat={handleIslandNewChat}
+                onStop={handleIslandStop}
+                autoExpandOnFirstLoad={true}
+                availableTables={availableTablesForIsland}
+                selectedTableKeys={chatSelectedTables}
+                onChangeSelectedTableKeys={setChatSelectedTables}
+                conversations={(islandChatThreads || [])
+                    .filter(t => Array.isArray(t?.messages) && t.messages.length > 0)
+                    .map(t => ({ id: t.local_id, title: t.title, updatedAt: t.updated_at }))}
+                activeConversationId={activeIslandThreadId}
+                onSelectConversation={handleIslandSelectThread}
+                onDeleteConversation={handleIslandDeleteConversation}
             />
 
-            {/* 组件库 Modal - 用于承载所有流程节点 */}
-            <Modal
-                title="流程节点库"
-                open={showNodeLibrary}
-                onCancel={() => setShowNodeLibrary(false)}
-                footer={null}
-                width={900}
-                centered
-                mask={false}
-                styles={{ body: { padding: 0 } }}
-                wrapClassName="node-library-modal-wrapper"
-            >
-                <div className="node-library-modal-body" style={{ display: 'flex', height: '60vh', background: 'transparent' }}>
-                    <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
-                        <NodeToolbox onDragStart={onDragStartHandler} onAddNode={addNodeFromLibrary} />
-                    </div>
-                    <div style={{ width: 300, background: 'rgba(255, 255, 255, 0.05)', borderLeft: '1px solid rgba(255, 255, 255, 0.1)', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                        <DragOutlined style={{ fontSize: 48, color: 'rgba(255, 255, 255, 0.3)' }} />
-                        <p style={{ marginTop: 15, color: 'rgba(255, 255, 255, 0.7)', textAlign: 'center' }}>
-                            将节点拖拽到画布区域即可使用
-                        </p>
-                    </div>
-                </div>
-            </Modal>
             {false && (<Drawer
                 title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

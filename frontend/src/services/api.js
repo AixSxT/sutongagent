@@ -71,31 +71,37 @@ export const aiApi = {
     // ============ AI对话模式 ============
 
     // 开始对话（选择表后调用）
-    chatStart: async (selectedFiles) => {
+    chatStart: async (selectedFiles, options = {}) => {
         console.log('[aiApi] chatStart:', selectedFiles);
         const response = await api.post('/ai/chat/start', {
             selected_files: selectedFiles
+        }, {
+            signal: options.signal
         });
         console.log('[aiApi] chatStart result:', response.data);
         return response.data;
     },
 
     // 发送消息
-    chatMessage: async (sessionId, message) => {
+    chatMessage: async (sessionId, message, options = {}) => {
         console.log('[aiApi] chatMessage:', { sessionId, message });
         const response = await api.post('/ai/chat/message', {
             session_id: sessionId,
             message: message
+        }, {
+            signal: options.signal
         });
         console.log('[aiApi] chatMessage result:', response.data);
         return response.data;
     },
 
     // 确认生成工作流
-    chatGenerate: async (sessionId) => {
+    chatGenerate: async (sessionId, options = {}) => {
         console.log('[aiApi] chatGenerate:', sessionId);
         const response = await api.post('/ai/chat/generate', {
             session_id: sessionId
+        }, {
+            signal: options.signal
         });
         console.log('[aiApi] chatGenerate result:', response.data);
         return response.data;

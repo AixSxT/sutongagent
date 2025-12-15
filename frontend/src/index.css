@@ -47,9 +47,10 @@ body {
 .app-content {
   flex: 1;
   display: flex;
-  padding: 24px;
-  gap: 24px;
+  padding: 0;
+  gap: 0;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* 左侧面板 */
@@ -87,12 +88,15 @@ body {
 
 /* iOS 卡片风格 */
 .ios-card {
-  background: #FFFFFF;
+  background: var(--ios-card-bg) !important;
   border-radius: 18px;
   box-shadow: var(--shadow-sm);
   border: 1px solid rgba(0, 0, 0, 0.02);
   overflow: hidden;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  color: #1D1D1F;
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
 
 .ios-card:hover {
@@ -222,12 +226,14 @@ body {
 /* 右侧画布容器 */
 .canvas-container {
   flex: 1;
-  background: #FFFFFF;
+  background: rgba(255, 255, 255, 0.9) !important;
   border-radius: 24px;
   box-shadow: var(--shadow-sm);
   position: relative;
   overflow: hidden;
   border: 1px solid rgba(0, 0, 0, 0.02);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
 
 /* Tab 切换优化 */
@@ -357,6 +363,200 @@ body {
               height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* 灵动岛：五颜六色呼吸灯边框（内侧发光，不影响交互） */
+.ai-island::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(0, 198, 251, 0.85),
+    rgba(0, 91, 234, 0.85),
+    rgba(175, 82, 222, 0.85),
+    rgba(255, 79, 163, 0.85),
+    rgba(255, 99, 99, 0.85),
+    rgba(52, 199, 89, 0.85),
+    rgba(0, 198, 251, 0.85)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.55;
+  filter: saturate(1.2);
+  animation: island-breathe 2.6s ease-in-out infinite;
+}
+
+@keyframes island-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.75; }
+}
+
+/* 灵动岛：边框拖拽缩放（仅作为交互热区） */
+.ai-island-resize-handle {
+  position: absolute;
+  z-index: 2002;
+}
+
+.ai-island-resize-handle.right {
+  top: 48px; /* 避开 Header */
+  right: 0;
+  width: 8px;
+  height: calc(100% - 56px);
+  cursor: ew-resize;
+}
+
+.ai-island-resize-handle.bottom {
+  left: 0;
+  bottom: 0;
+  height: 8px;
+  width: 100%;
+  cursor: ns-resize;
+}
+
+.ai-island-resize-handle.corner {
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* 节点配置抽屉：磨砂半透明白玻璃（影响所有节点配置） */
+.node-config-drawer-glass .ant-drawer-content {
+  background: rgba(255, 255, 255, 0.72) !important;
+  backdrop-filter: blur(22px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%) !important;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.node-config-drawer-glass .ant-drawer-header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+}
+
+.node-config-drawer-glass .ant-drawer-title,
+.node-config-drawer-glass .ant-drawer-close {
+  color: rgba(29, 29, 31, 0.92) !important;
+}
+
+.node-config-drawer-glass .node-config-form .ant-form-item-label > label {
+  color: rgba(29, 29, 31, 0.82) !important;
+}
+
+.node-config-drawer-glass .ant-input,
+.node-config-drawer-glass .ant-input-affix-wrapper,
+.node-config-drawer-glass .ant-select-selector {
+  background: rgba(255, 255, 255, 0.6) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  color: rgba(29, 29, 31, 0.92) !important;
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+}
+
+.node-config-drawer-glass .ant-input::placeholder {
+  color: rgba(29, 29, 31, 0.35) !important;
+}
+
+.node-config-drawer-glass .ant-select-selection-placeholder {
+  color: rgba(29, 29, 31, 0.35) !important;
+}
+
+.node-config-drawer-glass .ant-divider {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* 允许复制聊天/历史文本（不影响 Header 拖拽） */
+.ai-island .ai-message-area,
+.ai-island .ai-message-area *,
+.ai-island .chat-bubble,
+.ai-island .chat-bubble *,
+.ai-island .ai-island-history-panel,
+.ai-island .ai-island-history-panel * {
+  user-select: text !important;
+}
+
+/* 灵动岛内 Select 下拉：确保在灵动岛面板之上 */
+.ai-island-select-dropdown {
+  z-index: 3005 !important;
+}
+
+/* 顶部白色玻璃提示（3s 自动消失由 JS 控制） */
+.glass-top-toast {
+  position: fixed;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3006;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.12);
+  color: rgba(29, 29, 31, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+  animation: glass-toast-in 0.22s ease-out;
+}
+
+@keyframes glass-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 保存工作流弹窗：灵动岛同款黑色玻璃（仅该弹窗） */
+.workflow-save-modal .ant-modal-content {
+  background: rgba(22, 22, 22, 0.78) !important;
+  backdrop-filter: blur(28px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
+  border-radius: 14px !important;
+  border: none !important;
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.45) !important;
+}
+
+.workflow-save-modal .ant-modal-header {
+  background: transparent !important;
+  border-bottom: none !important;
+}
+
+.workflow-save-modal .ant-modal-title {
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.workflow-save-modal .ant-modal-close-x {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+.workflow-save-modal .ant-input,
+.workflow-save-modal .ant-input-affix-wrapper,
+.workflow-save-modal .ant-input-textarea {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.workflow-save-modal .ant-input::placeholder {
+  color: rgba(255, 255, 255, 0.35) !important;
+}
+
+.workflow-save-modal .workflow-preview-code {
+  margin: 0;
+  padding: 12px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 /* 顶部 Header */
 .ai-island-header {
   height: 48px;
@@ -402,8 +602,8 @@ body {
 /* 聊天气泡重构 - 更像 Note */
 .chat-bubble {
   max-width: 90%;
-  padding: 8px 12px;
-  border-radius: 8px; /* 小圆角 */
+  padding: 10px 12px;
+  border-radius: 12px;
   font-size: 13px;
   line-height: 1.5;
   margin-bottom: 10px;
@@ -418,10 +618,36 @@ body {
 }
 
 .chat-bubble.ai {
-  background: transparent;
-  color: rgba(255, 255, 255, 0.9);
+  /* 大模型回答：玻璃磨砂卡片（简约高级感） */
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 10px 30px rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.92);
   margin-right: auto;
-  padding-left: 0;
+}
+
+.chat-speaker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.chat-speaker.user {
+  color: rgba(94, 160, 255, 0.95);
+}
+
+.chat-speaker.ai {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.chat-content {
+  white-space: pre-wrap;
 }
 
 /* 底部输入框 - 模仿 Raycast 的 Footer */
@@ -555,6 +781,85 @@ body {
 
 .ai-avatar-container.generating.ai-avatar-pulse {
   animation: avatar-flow 1.1s linear infinite;
+}
+
+/* ========== 小助手粉色猫头像动画 ========== */
+.cat-avatar {
+  display: block;
+}
+
+.cat-runner {
+  transform-origin: 32px 40px;
+}
+
+/* 等待：坐着钓鱼（默认 idle） */
+.ai-avatar-container:not(.thinking):not(.generating) .cat-fishing {
+  transform-origin: 50px 14px;
+  animation: cat-fish-rod 1.8s ease-in-out infinite;
+}
+
+.ai-avatar-container:not(.thinking):not(.generating) .cat-fish {
+  transform-origin: 50px 32px;
+  animation: cat-fish-bob 1.4s ease-in-out infinite;
+}
+
+.ai-avatar-container:not(.thinking):not(.generating) .cat-scarf-tail {
+  transform-origin: 36px 36px;
+  animation: cat-scarf-float 1.8s ease-in-out infinite;
+}
+
+@keyframes cat-fish-rod {
+  0%, 100% { transform: rotate(-6deg) translateY(0); }
+  50% { transform: rotate(7deg) translateY(1px); }
+}
+
+@keyframes cat-fish-bob {
+  0%, 100% { transform: translateY(0) rotate(2deg); }
+  50% { transform: translateY(-2px) rotate(-3deg); }
+}
+
+@keyframes cat-scarf-float {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(10deg); }
+}
+
+/* 思考：原地转圈 */
+.ai-avatar-container.thinking .cat-runner {
+  animation: cat-think 0.55s ease-in-out infinite;
+}
+
+@keyframes cat-think {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1px) scale(1.03); }
+}
+
+/* 生成：跑来跑去 */
+.ai-avatar-container.generating .cat-runner {
+  animation: cat-run 0.55s ease-in-out infinite alternate;
+}
+
+.ai-avatar-container.generating .cat-feet {
+  animation: cat-feet 0.22s ease-in-out infinite alternate;
+}
+
+.ai-avatar-container.generating .cat-tail {
+  transform-origin: 46px 50px;
+  animation: cat-tail 0.28s ease-in-out infinite alternate;
+}
+
+@keyframes cat-run {
+  0% { transform: translateX(-2px) scaleX(1); }
+  100% { transform: translateX(2px) scaleX(1); }
+}
+
+@keyframes cat-feet {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-0.8px); opacity: 0.95; }
+}
+
+@keyframes cat-tail {
+  0% { transform: rotate(-6deg); }
+  100% { transform: rotate(10deg); }
 }
 
 @keyframes avatar-pulse {
@@ -698,433 +1003,4 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app-container {
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    background: #121212 !important; /* 确保容器也是深色 */
-    background-image: none !important; /* 移除原来的 iOS 渐变 */
-    color: #f0f0f0; 
-}
-
-/* 2. 主内容区：调整为居中容器 (覆盖原有样式) */
-.app-content {
-    flex: 1;
-    display: flex;
-    justify-content: center; /* 关键：水平居中内容 */
-    align-items: flex-start; /* 内容从顶部开始 */
-    
-    padding: 0 !important; /* 移除外层 padding，由内部容器控制 */
-    padding-top: 100px !important; 
-    
-    gap: 0 !important; /* 移除原有间距 */
-    overflow: hidden;
-    height: 100vh;
-    box-sizing: border-box;
-    position: relative; /* 确保内部元素的 z-index 可用 */
-}
-
-/* 画布视图外层容器：为 100% 高度提供锚点 */
-.canvas-view-wrapper {
-    height: 100%;
-    position: relative;
-}
-
-/* 可选：顶部背景光晕（不影响交互） */
-.canvas-bg-glow-top {
-    position: absolute;
-    top: -220px;
-    left: 50%;
-    width: 900px;
-    height: 520px;
-    transform: translateX(-50%);
-    background: radial-gradient(circle at center, rgba(255, 99, 99, 0.18), rgba(255, 99, 99, 0) 70%);
-    filter: blur(24px);
-    pointer-events: none;
-    z-index: 1;
-}
-
-/* 新增：画布工作区居中容器 */
-.canvas-workspace-centered {
-    width: 1300px; /* 定义整个工作区的最大宽度 */
-    max-width: 95%; /* 保证响应式 */
-    height: 100%;
-    
-    display: flex;
-    gap: 24px; /* 恢复左侧面板和画布之间的间距 */
-    padding: 0 0 24px 0; /* 底部和侧边留出空间 */
-    
-    position: relative; 
-    z-index: 2;
-}
-
-/* 3. 画布容器 (Canvas) 自身：深色玻璃卡片 (覆盖原有样式) */
-.canvas-container {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    
-    /* 核心磨砂效果 - 深色玻璃卡片 */
-    background: rgba(22, 22, 22, 0.9) !important; 
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    
-    border-radius: 18px !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
-}
-
-/* 4. ReactFlow 内部元素 (颜色调和) */
-.react-flow__background {
-    background-color: #1a1a1a !important; /* 画布背景改为柔和的深灰色 */
-    background-image: radial-gradient(#3a3a3a 1px, transparent 1px), radial-gradient(#3a3a3a 1px, transparent 1px) !important;
-    background-size: 20px 20px, 20px 20px !important;
-}
-.react-flow__controls {
-    /* 控件背景适应深色外壳 */
-    background: rgba(255, 255, 255, 0.05) !important; 
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    box-shadow: none !important;
-}
-.react-flow__controls-button {
-    color: #f0f0f0 !important;
-}
-
-/* 节点组件内部文字颜色修正 */
-.react-flow__node div {
-    color: #1D1D1F !important; 
-}
-/* 确保结果浮层的表格背景适应暗色 */
-.result-floating-panel .ant-table-wrapper {
-    background: rgba(255, 255, 255, 0.95) !important;
-}
-
-/* === 左侧面板深色重构 - 第二步：左侧卡片与元素 === */
-
-/* 1. 左侧面板布局容器: 保持 flex-direction: column; */
-.left-panel {
-    width: 360px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    overflow-y: auto;
-    padding-right: 4px;
-    
-    background: transparent !important; /* 依赖全局深色背景 */
-}
-
-/* 2. 组件库入口卡片和通用深色卡片样式 (ios-card) */
-.ios-card, .node-library-modal-body {
-    /* 核心磨砂效果 */
-    background: rgba(22, 22, 22, 0.95) !important;
-    backdrop-filter: blur(15px);
-    -webkit-backdrop-filter: blur(15px);
-    border: 1px solid rgba(255, 255, 255, 0.12); /* 亮色描边 */
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); /* 深色阴影 */
-    color: #f0f0f0; /* 卡片内文字变白 */
-    overflow: hidden;
-}
-
-/* 3. 拖拽节点 (draggable-node)：适配深色卡片 */
-.draggable-node {
-    background: rgba(255, 255, 255, 0.08) !important; /* 节点底色变浅 */
-    color: rgba(255, 255, 255, 0.9) !important; 
-    border: 1px solid rgba(255, 255, 255, 0.05);
-}
-.draggable-node:hover {
-    background: rgba(255, 255, 255, 0.15) !important;
-    box-shadow: none; 
-}
-.draggable-node div:last-child {
-    color: rgba(255, 255, 255, 0.4) !important; /* 描述文字变浅 */
-}
-
-/* 4. 文件上传和列表适配 (确保卡片内元素颜色正确) */
-.ant-upload.ant-upload-drag {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 2px dashed rgba(255, 255, 255, 0.3) !important;
-}
-.ant-upload.ant-upload-drag:hover {
-    background: rgba(255, 255, 255, 0.1) !important;
-}
-.file-manager-section .ant-list-item {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border-color: rgba(255, 255, 255, 0.1) !important;
-    border-radius: 8px;
-    color: rgba(255, 255, 255, 0.8) !important;
-}
-.file-manager-section .ant-list-item-meta-title a {
-    color: rgba(255, 255, 255, 0.9) !important;
-}
-
-/* 5. 模态框样式：应用深色磨砂背景和浅色标题 */
-.ant-modal-content {
-    background: rgba(22, 22, 22, 0.95) !important;
-    backdrop-filter: blur(15px);
-    -webkit-backdrop-filter: blur(15px);
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-}
-.ant-modal-header {
-    background: transparent !important;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-    padding-bottom: 16px;
-}
-.ant-modal-title {
-    color: #f0f0f0 !important;
-    font-weight: 600;
-}
-.ant-modal-close-x {
-    color: rgba(255, 255, 255, 0.7) !important;
-}
-
-/* 6. 节点列表标题颜色适配 (覆盖 Ant Design 默认) */
-.ant-collapse-header,
-.left-panel div[style*="font-size: 13px"],
-.left-panel div[style*="font-size: 12px"] {
-    color: rgba(255, 255, 255, 0.8) !important; 
-}
-.ant-collapse {
-    background: transparent !important;
-    border: none !important;
-}
-.ant-collapse-item {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-/* 7. 允许拖拽到画布：Modal 外部区域不拦截指针事件 */
-.node-library-modal-wrapper {
-    pointer-events: none;
-}
-.node-library-modal-wrapper .ant-modal {
-    pointer-events: auto;
-}
-
-/* === 文件管理区域 深色适配 === */
-
-/* 1. 文件上传区域 */
-.ant-upload.ant-upload-drag {
-    /* 覆盖亮色背景和边框，适配深色卡片 */
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 2px dashed rgba(255, 255, 255, 0.3) !important;
-    color: rgba(255, 255, 255, 0.6) !important;
-}
-
-.ant-upload.ant-upload-drag:hover {
-    background: rgba(255, 255, 255, 0.1) !important;
-    border-color: rgba(255, 255, 255, 0.5) !important;
-}
-
-/* 2. 文件列表项 (FileManager) */
-/* 覆盖原有的浅色列表项样式 */
-.file-manager-list .ant-list-item,
-.left-panel .ant-list-item,
-.file-item {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    color: rgba(255, 255, 255, 0.8) !important;
-    margin-bottom: 6px;
-    border-radius: 8px;
-    padding: 12px !important;
-}
-.file-manager-list .ant-list-item:hover,
-.left-panel .ant-list-item:hover,
-.file-item:hover {
-    background: rgba(255, 255, 255, 0.08) !important;
-}
-.file-manager-list .ant-list-item-meta-title a,
-.left-panel .ant-list-item-meta-title a {
-    color: rgba(255, 255, 255, 0.9) !important; /* 文件名标题颜色 */
-}
-.file-manager-list .ant-list-item-action,
-.left-panel .ant-list-item-action {
-    color: rgba(255, 255, 255, 0.4) !important; /* 删除图标颜色 */
-}
-
-/* 选中项 (如果存在) */
-.file-item-selected {
-    background: rgba(0, 122, 255, 0.2) !important; /* 蓝色选中背景 */
-    border-color: rgba(0, 122, 255, 0.5) !important;
-}
-
-/* 3. 输入框/选择器 (如果 Ant Design 元素在卡片内) */
-/* 强制 Ant Design 输入框和选择器背景透明或深色 */
-.ios-card .ant-input,
-.ios-card .ant-select-selector {
-    background: rgba(255, 255, 255, 0.08) !important;
-    color: #f0f0f0 !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-.ios-card .ant-input:focus,
-.ios-card .ant-input-focused,
-.ios-card .ant-select-focused .ant-select-selector,
-.ios-card .ant-select-selector:focus {
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2) !important;
-    background: rgba(255, 255, 255, 0.1) !important;
-}
-
-/* === 文件资源区域：深色背景上的白色卡片风格 === */
-.file-manager-section .file-manager-title {
-    color: rgba(255, 255, 255, 0.9) !important;
-}
-
-/* 上分区：上传卡片 */
-.file-manager-section .file-upload-card {
-    background: rgba(255, 255, 255, 0.98) !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
-    padding: 18px !important;
-}
-.file-manager-section .ant-upload.ant-upload-drag {
-    background: transparent !important;
-    border: none !important;
-    color: rgba(0, 0, 0, 0.45) !important;
-}
-.file-manager-section .ant-upload.ant-upload-drag:hover {
-    background: transparent !important;
-    border: none !important;
-}
-.file-manager-section .ant-upload-drag-icon {
-    margin-bottom: 8px !important;
-}
-.file-manager-section .ant-upload-text {
-    color: rgba(0, 0, 0, 0.45) !important;
-}
-
-/* 下分区：文件列表（容器透明 + 列表项白卡片） */
-.file-manager-section .file-list-card {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 18px !important;
-    box-shadow: none !important;
-}
-.file-manager-section .file-manager-list .ant-list-item {
-    background: rgba(255, 255, 255, 0.98) !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    border-radius: 14px !important;
-    padding: 14px 16px !important;
-    margin: 10px 0 !important;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28) !important;
-}
-.file-manager-section .file-manager-list .ant-list-item-meta-title a {
-    color: rgba(0, 0, 0, 0.88) !important;
-}
-.file-manager-section .file-manager-list .ant-list-item-action {
-    color: rgba(0, 0, 0, 0.35) !important;
-}
-
-/* === 拖拽节点平铺样式适配 === */
-.draggable-node {
-    padding: 10px !important;
-    margin-bottom: 0px !important;
-    display: flex !important;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-}
-.draggable-node .draggable-node-icon {
-    margin-bottom: 2px;
-}
-.draggable-node div:nth-child(2) {
-    font-size: 14px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.9) !important;
-}
-.draggable-node div:last-child {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.4) !important;
-    margin-top: 2px;
-}
-
-/* === 文件管理区域 最终深色磨砂适配 === */
-
-/* 额外：移除文件资源白卡片外壳，让内部元素直接玻璃化 */
-.file-manager-section .file-upload-card,
-.file-manager-section .file-list-card {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-/* 1. 文件上传区域 (ant-upload-drag) - 变为玻璃状 */
-.file-manager .ant-upload.ant-upload-drag {
-    background: rgba(255, 255, 255, 0.08) !important;
-    border: 2px dashed rgba(255, 255, 255, 0.25) !important;
-    color: rgba(255, 255, 255, 0.7) !important;
-    border-radius: 16px !important;
-}
-.file-manager .ant-upload.ant-upload-drag .ant-upload-drag-icon .anticon {
-    color: #FF6363 !important;
-}
-
-.file-manager .ant-upload.ant-upload-drag:hover {
-    background: rgba(255, 255, 255, 0.15) !important;
-    border-color: rgba(255, 255, 255, 0.5) !important;
-}
-
-/* 2. 文件列表项 (ant-list-item) - 变为玻璃状 */
-.file-manager .file-manager-list .ant-list-item,
-.file-manager .file-item {
-    background: rgba(255, 255, 255, 0.12) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    color: rgba(255, 255, 255, 0.9) !important;
-    margin-bottom: 8px !important;
-    border-radius: 12px !important;
-    padding: 12px 16px !important;
-    transition: all 0.2s;
-}
-.file-manager .file-manager-list .ant-list-item:hover,
-.file-manager .file-item:hover {
-    background: rgba(255, 255, 255, 0.2) !important;
-}
-
-/* 3. 列表项内部文字和图标颜色 */
-.file-manager .file-manager-list .ant-list-item-meta-title a {
-    color: rgba(255, 255, 255, 0.95) !important;
-}
-.file-manager .file-manager-list .ant-list-item-meta-description {
-    color: rgba(255, 255, 255, 0.6) !important;
-}
-.file-manager .file-manager-list .ant-list-item-action {
-    color: rgba(255, 255, 255, 0.5) !important;
-}
-.file-manager .file-manager-list .ant-list-item-action .anticon {
-    color: rgba(255, 255, 255, 0.8) !important;
-}
-
-/* === 组件库入口卡片最终美化 === */
-
-/* 1. 核心 ios-card 样式 (确保背景是深色玻璃) */
-.left-panel .ios-card {
-    background: rgba(22, 22, 22, 0.95) !important;
-    backdrop-filter: blur(15px);
-    -webkit-backdrop-filter: blur(15px);
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
-    color: #f0f0f0 !important;
-    border-radius: 18px !important;
-    overflow: hidden;
-}
-
-/* 2. 组件库入口卡片内容样式 (确保文字显眼且卡片延伸) */
-.left-panel .ios-card .card-content {
-    padding: 40px 20px 40px 20px !important;
-    text-align: center;
-}
-
-/* 3. 标题和描述文字颜色调整为白色显眼 */
-.left-panel .ios-card .card-content div {
-    color: #FFFFFF !important;
-}
-
-/* 4. 确保图标颜色显眼 */
-.left-panel .ios-card .card-content .anticon {
-    color: #FF6363 !important;
-}
-
-/* 5. 描述文字稍微透明一点 */
-.left-panel .ios-card .card-content div[style*="font-size: 12px"] {
-    color: rgba(255, 255, 255, 0.7) !important;
-}
+/* (Removed) 深色/居中 Canvas 覆盖：恢复为原始 Light/iOS 布局与样式 */
