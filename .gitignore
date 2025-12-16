@@ -6,3 +6,34 @@ data/
 __pycache__/
 *.pyc
 .env
+
+# Local/derived data (avoid committing personal input/output files)
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.csv
+*.tsv
+~$*.xlsx
+
+**/input/
+**/inputs/
+**/output/
+**/outputs/
+**/result/
+**/results/
+**/logs/
+**/log/
+**/tmp/
+**/temp/
+**/cache/
+
+# Python environments/build artifacts
+**/venv/
+**/.venv/
+backend/venv/
+
+# Common local secrets
+.env.*
+*.pem
+*.key
