@@ -468,6 +468,74 @@ body {
   border-color: rgba(0, 0, 0, 0.08) !important;
 }
 
+/* 画布节点错误提示：磨砂白玻璃气泡（点击打开错误抽屉） */
+.node-error-bubble {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  max-width: 260px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.12);
+  color: rgba(29, 29, 31, 0.9);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+  z-index: 11;
+}
+
+.node-error-bubble-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-weight: 800;
+  color: #ff3b30;
+}
+
+.node-error-bubble-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  color: rgba(29, 29, 31, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.node-error-bubble-close:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.node-error-bubble-action {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(29, 29, 31, 0.55);
+}
+
+.node-error-bubble-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  color: rgba(29, 29, 31, 0.88);
+}
+
 /* 允许复制聊天/历史文本（不影响 Header 拖拽） */
 .ai-island .ai-message-area,
 .ai-island .ai-message-area *,

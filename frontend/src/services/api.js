@@ -105,6 +105,14 @@ export const aiApi = {
         });
         console.log('[aiApi] chatGenerate result:', response.data);
         return response.data;
+    },
+
+    // 节点错误建议（可选 AI）
+    errorSuggest: async (payload, options = {}) => {
+        const response = await api.post('/ai/error-suggest', payload, {
+            signal: options.signal
+        });
+        return response.data;
     }
 };
 
@@ -129,6 +137,12 @@ export const workflowApi = {
     // 获取工作流
     get: async (workflowId) => {
         const response = await api.get(`/workflow/${workflowId}`);
+        return response.data;
+    },
+
+    // 删除工作流
+    delete: async (workflowId) => {
+        const response = await api.delete(`/workflow/${workflowId}`);
         return response.data;
     },
 

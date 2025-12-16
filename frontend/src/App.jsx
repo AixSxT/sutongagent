@@ -266,7 +266,15 @@ function CustomNode({ data, selected }) {
 
         if (status === 'error') {
             return (
-                <div style={{ ...baseStyle, background: '#FF3B30', border: '2px solid white' }} title={data.errorMessage || '执行失败'}>
+                <div
+                    style={{ ...baseStyle, background: '#FF3B30', border: '2px solid white', cursor: data.onViewError ? 'pointer' : 'default' }}
+                    title={data.errorMessage || '执行失败'}
+                    onClick={(e) => {
+                        if (!data.onViewError) return;
+                        e.stopPropagation();
+                        data.onViewError(data.nodeId);
+                    }}
+                >
                     <CloseOutlined style={{ color: 'white', fontSize: 11 }} />
                 </div>
             );
@@ -274,6 +282,8 @@ function CustomNode({ data, selected }) {
 
         return null;
     };
+
+    const showErrorBubble = status === 'error' && data.errorMessage && !data.errorBubbleDismissed;
 
     return (
         <div style={{
@@ -316,6 +326,33 @@ function CustomNode({ data, selected }) {
                 }} />
             )}
             {getStatusIndicator()}
+            {showErrorBubble && (
+                <div
+                    className="node-error-bubble"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (data.onViewError) data.onViewError(data.nodeId);
+                    }}
+                    title="点击查看错误详情"
+                >
+                    <div className="node-error-bubble-title">
+                        <span>错误</span>
+                        <span className="node-error-bubble-action">查看</span>
+                    </div>
+                    <button
+                        className="node-error-bubble-close"
+                        type="button"
+                        title="关闭"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (data.onDismissErrorBubble) data.onDismissErrorBubble(data.nodeId);
+                        }}
+                    >
+                        <CloseOutlined style={{ fontSize: 12 }} />
+                    </button>
+                    <div className="node-error-bubble-text">{String(data.errorMessage || '')}</div>
+                </div>
+            )}
         </div>
     );
 }
@@ -345,6 +382,95 @@ function DraggableNode({ type, config, onDragStart, onAddNode }) {
     );
 }
 
+const PRESET_SIGNING_PERFORMANCE_PY = `import pandas as pd
+
+# 约定：inputs[0] = 提货表，inputs[1] = 袁欢导出的表（ERP签收明细）
+df_tihuo = inputs[0].copy() if len(inputs) > 0 and inputs[0] is not None else pd.DataFrame()
+df_erp = inputs[1].copy() if len(inputs) > 1 and inputs[1] is not None else pd.DataFrame()
+
+# 容错：若用户连线顺序颠倒，简单按列名识别并交换（不改变对比逻辑）
+if '商城子订单' in df_erp.columns and '子订单号' in df_tihuo.columns:
+    df_tihuo, df_erp = df_erp, df_tihuo
+
+# 运行时可在节点配置里选择团队；为空则不筛选
+team_name = ''
+try:
+    team_name = (config or {}).get('team_name', '')
+except Exception:
+    team_name = ''
+if isinstance(team_name, (list, tuple)):
+    team_name = team_name[0] if team_name else ''
+team_name = str(team_name).strip()
+
+# 3. 筛选团队（保持原逻辑）
+if team_name and '办公室团队' in df_tihuo.columns:
+    df_tihuo = df_tihuo[df_tihuo['办公室团队'] == team_name].copy()
+
+# 4. 数据预处理（保持原逻辑）
+df_tihuo['顾客提货商品金额'] = pd.to_numeric(df_tihuo['顾客提货商品金额'], errors='coerce').fillna(0)
+
+erp_cols_map = {
+    '顾客签收金额': 'ERP签收金额',
+    '签收金额': 'ERP签收金额',
+    '子订单号': '子订单号',
+    '子订单编号': '子订单号',
+    '主订单编号': '主订单号_ERP',
+    '主订单号': '主订单号_ERP'
+}
+
+df_erp = df_erp.rename(columns=erp_cols_map)
+df_tihuo = df_tihuo.rename(columns={'商城子订单': '子订单号', '顾客提货商品金额': '提货金额', '商城主订单': '主订单号_提货'})
+
+# 保持原脚本读入 dtype=str 的效果（尽量对齐）
+if '子订单号' in df_tihuo.columns:
+    df_tihuo['子订单号'] = df_tihuo['子订单号'].astype(str)
+if '子订单号' in df_erp.columns:
+    df_erp['子订单号'] = df_erp['子订单号'].astype(str)
+
+if 'ERP签收金额' not in df_erp.columns or '子订单号' not in df_erp.columns:
+    raise ValueError(f\"ERP表中找不到'签收金额'或'子订单号'列，请检查表头名称。当前ERP列名: {list(df_erp.columns)}\")
+
+df_erp['ERP签收金额'] = pd.to_numeric(df_erp['ERP签收金额'], errors='coerce').fillna(0)
+
+# 5. 提取子集 & 聚合（保持原逻辑）
+tihuo_cols = ['子订单号', '主订单号_提货', '订单销售人员', '提货商品', '提货金额', '顾客提货时间']
+erp_cols = ['子订单号', '主订单号_ERP', '创建人姓名', '商品名称', 'ERP签收金额', '签收时间']
+
+tihuo_cols = [c for c in tihuo_cols if c in df_tihuo.columns]
+erp_cols = [c for c in erp_cols if c in df_erp.columns]
+
+tihuo_sub = df_tihuo[tihuo_cols].copy()
+erp_sub = df_erp[erp_cols].copy()
+
+tihuo_first = tihuo_sub.groupby('子订单号').first().reset_index()
+tihuo_agg = tihuo_first.copy()
+tihuo_agg['提货金额'] = tihuo_sub.groupby('子订单号')['提货金额'].sum().values
+
+erp_first = erp_sub.groupby('子订单号').first().reset_index()
+erp_agg = erp_first.copy()
+erp_agg['ERP签收金额'] = erp_sub.groupby('子订单号')['ERP签收金额'].sum().values
+
+# 6. 对比（Outer Join - 核心需求）
+merged = pd.merge(tihuo_agg, erp_agg, on='子订单号', how='outer', indicator=True)
+
+def get_status(row):
+    if row['_merge'] == 'left_only':
+        return '只在提货表 (ERP漏单)'
+    if row['_merge'] == 'right_only':
+        return '只在ERP表 (多记/跨月)'
+    t_amt = row.get('提货金额', 0)
+    e_amt = row.get('ERP签收金额', 0)
+    if pd.isna(t_amt): t_amt = 0
+    if pd.isna(e_amt): e_amt = 0
+    if abs(t_amt - e_amt) > 0.01:
+        return f'金额不一致 (差 {t_amt - e_amt:.2f})'
+    return '匹配成功'
+
+merged['对比结果'] = merged.apply(get_status, axis=1)
+
+result = merged
+`;
+
 const PRESET_WORKFLOWS = [
     {
         id: 'preset_1',
@@ -373,21 +499,61 @@ const PRESET_WORKFLOWS = [
                 { source: 'n2', target: 'n3' }
             ]
         }
+    },
+    {
+        id: 'preset_signing_performance',
+        name: '主品签收业绩',
+        description: '提货表 vs 袁欢导出的表（Outer Join 对比）',
+        config: {
+            nodes: [
+                { id: 'tihuo', type: 'source', label: '提货表', config: {} },
+                { id: 'erp', type: 'source', label: '袁欢导出的表', config: {} },
+                { id: 'compare', type: 'code', label: '主品签收业绩', config: { python_code: PRESET_SIGNING_PERFORMANCE_PY, team_name: [] } },
+                { id: 'out', type: 'output', label: '输出Excel', config: { filename: '主品签收业绩_对比结果.xlsx' } }
+            ],
+            edges: [
+                { source: 'tihuo', target: 'compare' },
+                { source: 'erp', target: 'compare' },
+                { source: 'compare', target: 'out' }
+            ]
+        }
     }
 ];
 
-function DraggableWorkflow({ workflow, kind }) {
+function DraggableWorkflow({ workflow, kind, onApplyWorkflow, onDeleteWorkflow }) {
     const onDragStartInternal = (event) => {
         const payload = kind === 'saved'
             ? { kind: 'saved', workflow_id: workflow?.id, name: workflow?.name }
             : { kind: 'preset', id: workflow?.id, name: workflow?.name, config: workflow?.config };
 
         event.dataTransfer.setData('application/excelflow-workflow', JSON.stringify(payload));
-        event.dataTransfer.effectAllowed = 'copy';
+        // 允许画布端按需使用 copy 或 move（避免与 dropEffect 不匹配导致无法放置）
+        event.dataTransfer.effectAllowed = 'copyMove';
     };
 
     return (
-        <div className="draggable-node" draggable onDragStart={onDragStartInternal}>
+        <div
+            className="draggable-node"
+            draggable
+            onDragStart={onDragStartInternal}
+            onDoubleClick={() => onApplyWorkflow?.({ kind, workflow })}
+            title="拖拽到画布，或双击应用到画布"
+            style={{ position: 'relative' }}
+        >
+            <div style={{ position: 'absolute', right: 8, top: 8, zIndex: 2 }}>
+                <Tooltip title="管理">
+                    <Button
+                        type="text"
+                        size="small"
+                        icon={<SettingOutlined />}
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onDeleteWorkflow?.({ kind, workflow });
+                        }}
+                    />
+                </Tooltip>
+            </div>
             <div className="draggable-node-icon" style={{ background: '#AF52DE', boxShadow: `0 2px 8px #AF52DE40` }}>
                 <ThunderboltOutlined />
             </div>
@@ -461,9 +627,10 @@ function FileManager({ files, onUpload, onDelete, onPreview }) {
 }
 
 // === 节点工具箱组件 ===
-function NodeToolbox({ onDragStart, onAddNode, savedWorkflows }) {
+function NodeToolbox({ onDragStart, onAddNode, savedWorkflows, onApplyWorkflow, onDeleteWorkflow, hiddenPresetWorkflowIds }) {
     const categoryKeys = Object.keys(NODE_CATEGORIES);
     const customWorkflows = Array.isArray(savedWorkflows) ? savedWorkflows : [];
+    const hiddenPresetIds = Array.isArray(hiddenPresetWorkflowIds) ? hiddenPresetWorkflowIds : [];
 
     return (
         <Collapse
@@ -491,8 +658,14 @@ function NodeToolbox({ onDragStart, onAddNode, savedWorkflows }) {
                 >
                     {catKey === 'preset' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {PRESET_WORKFLOWS.map(wf => (
-                                <DraggableWorkflow key={wf.id} workflow={wf} kind="preset" />
+                            {PRESET_WORKFLOWS.filter(wf => !hiddenPresetIds.includes(wf.id)).map(wf => (
+                                <DraggableWorkflow
+                                    key={wf.id}
+                                    workflow={wf}
+                                    kind="preset"
+                                    onApplyWorkflow={onApplyWorkflow}
+                                    onDeleteWorkflow={onDeleteWorkflow}
+                                />
                             ))}
                         </div>
                     )}
@@ -505,7 +678,13 @@ function NodeToolbox({ onDragStart, onAddNode, savedWorkflows }) {
                                 </div>
                             ) : (
                                 customWorkflows.map(wf => (
-                                    <DraggableWorkflow key={wf.id} workflow={wf} kind="saved" />
+                                    <DraggableWorkflow
+                                        key={wf.id}
+                                        workflow={wf}
+                                        kind="saved"
+                                        onApplyWorkflow={onApplyWorkflow}
+                                        onDeleteWorkflow={onDeleteWorkflow}
+                                    />
                                 ))
                             )}
                         </div>
@@ -553,9 +732,33 @@ function App() {
     const [topToast, setTopToast] = useState({ open: false, text: '' });
     const topToastTimerRef = useRef(null);
 
+    const HIDDEN_PRESET_WORKFLOWS_KEY = 'hidden_preset_workflows_v1';
+    const [hiddenPresetWorkflowIds, setHiddenPresetWorkflowIds] = useState(() => {
+        try {
+            const raw = localStorage.getItem(HIDDEN_PRESET_WORKFLOWS_KEY);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    });
+    const nodeIdCounterRef = useRef(0);
+
+    const genNodeId = useCallback(() => {
+        const uuid = globalThis?.crypto?.randomUUID?.();
+        if (uuid) return `node_${uuid}`;
+        nodeIdCounterRef.current += 1;
+        return `node_${Date.now()}_${nodeIdCounterRef.current}`;
+    }, []);
+
     const [selectedNode, setSelectedNode] = useState(null);
     const [showNodeConfig, setShowNodeConfig] = useState(false);
     const [nodeForm] = Form.useForm();
+    const nodeFormAutoSaveTimerRef = useRef(null);
+    const nodeFormProgrammaticSetRef = useRef(false);
+    const [teamSelectOptions, setTeamSelectOptions] = useState([]);
+    const [teamSelectLoading, setTeamSelectLoading] = useState(false);
+    const teamSelectCacheRef = useRef({ key: '', options: [] });
     const [fileSheets, setFileSheets] = useState({});
     const [configFileId, setConfigFileId] = useState(null); // 当前配置中选择的文件ID
     const [configSheet, setConfigSheet] = useState(null); // 当前配置中选择的Sheet
@@ -577,6 +780,34 @@ function App() {
 
     const [islandChatThreads, setIslandChatThreads] = useState([]); // [{local_id,title,session_id,messages,selected_tables,chat_status,created_at,updated_at}]
     const [activeIslandThreadId, setActiveIslandThreadId] = useState(null);
+
+    const ensureTeamSelectOptions = useCallback(async (fileId, sheetName) => {
+        if (!fileId || !sheetName) {
+            setTeamSelectOptions([]);
+            return;
+        }
+        const key = `${fileId}::${sheetName}`;
+        if (teamSelectCacheRef.current.key === key && (teamSelectCacheRef.current.options || []).length > 0) {
+            setTeamSelectOptions(teamSelectCacheRef.current.options);
+            return;
+        }
+        setTeamSelectLoading(true);
+        try {
+            const resp = await excelApi.previewSheet(fileId, sheetName, 5000);
+            const rows = Array.isArray(resp?.data) ? resp.data : [];
+            const teams = Array.from(new Set(
+                rows
+                    .map(r => (r && r['办公室团队'] != null ? String(r['办公室团队']).trim() : ''))
+                    .filter(Boolean)
+            )).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+            teamSelectCacheRef.current = { key, options: teams };
+            setTeamSelectOptions(teams);
+        } catch {
+            setTeamSelectOptions([]);
+        } finally {
+            setTeamSelectLoading(false);
+        }
+    }, []);
 
     const chatAbortControllerRef = useRef(null);
 
@@ -712,6 +943,11 @@ function App() {
     const [nodeResults, setNodeResults] = useState({}); // {nodeId: {columns, data, total_rows}}
     const [showNodeResultModal, setShowNodeResultModal] = useState(false);
     const [viewingNodeResult, setViewingNodeResult] = useState(null); // {nodeId, columns, data}
+    const [showNodeErrorDrawer, setShowNodeErrorDrawer] = useState(false);
+    const [viewingNodeErrorId, setViewingNodeErrorId] = useState(null);
+    const [lastExecutionLogs, setLastExecutionLogs] = useState([]);
+    const [aiErrorSuggestLoading, setAiErrorSuggestLoading] = useState(false);
+    const [aiErrorSuggestText, setAiErrorSuggestText] = useState('');
 
     const reactFlowWrapper = useRef(null);
     const [reactFlowInstance, setReactFlowInstance] = useState(null);
@@ -884,7 +1120,10 @@ function App() {
 
     const onDragOver = useCallback((event) => {
         event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
+        // 工作流从“库”拖到画布应为 copy；普通节点保持 move
+        const types = Array.from(event.dataTransfer?.types || []);
+        const isWorkflow = types.includes('application/excelflow-workflow');
+        event.dataTransfer.dropEffect = isWorkflow ? 'copy' : 'move';
         console.log('[DragDrop] onDragOver triggered');
     }, []);
 
@@ -980,7 +1219,7 @@ function App() {
         console.log('[DragDrop] Calculated position:', position);
 
         const newNode = {
-            id: `node_${Date.now()}`,
+            id: genNodeId(),
             type: 'custom',
             position,
             data: { type: data.type, label: data.config.label, description: '点击配置', config: {} },
@@ -989,11 +1228,18 @@ function App() {
 
         setNodes((nds) => nds.concat(newNode));
         setSelectedNode(newNode);
+        try {
+            nodeFormProgrammaticSetRef.current = true;
+            nodeForm.resetFields();
+            nodeForm.setFieldsValue({ _label: newNode.data.label });
+        } finally {
+            nodeFormProgrammaticSetRef.current = false;
+        }
         setConfigFileId(null);
         setConfigSheet(null);
         setShowNodeConfig(true);
         console.log('[DragDrop] Node created successfully');
-    }, [reactFlowInstance, setNodes, setEdges, setResult]);
+    }, [reactFlowInstance, setNodes, setEdges, setResult, genNodeId, nodeForm]);
 
     const addNodeFromLibrary = useCallback((type, config) => {
         if (!reactFlowWrapper.current) {
@@ -1012,7 +1258,7 @@ function App() {
         });
 
         const newNode = {
-            id: `node_${Date.now()}`,
+            id: genNodeId(),
             type: 'custom',
             position,
             data: { type, label: config.label, description: '点击配置', config: {} },
@@ -1020,16 +1266,30 @@ function App() {
 
         setNodes((nds) => nds.concat(newNode));
         setSelectedNode(newNode);
+        try {
+            nodeFormProgrammaticSetRef.current = true;
+            nodeForm.resetFields();
+            nodeForm.setFieldsValue({ _label: newNode.data.label });
+        } finally {
+            nodeFormProgrammaticSetRef.current = false;
+        }
         setConfigFileId(null);
         setConfigSheet(null);
         setShowNodeConfig(true);
-    }, [reactFlowInstance, setNodes, setSelectedNode, setShowNodeConfig, setConfigFileId, setConfigSheet]);
+    }, [reactFlowInstance, setNodes, setSelectedNode, setShowNodeConfig, setConfigFileId, setConfigSheet, genNodeId, nodeForm]);
 
     const onNodeClick = useCallback((event, node) => {
         setSelectedNode(node);
         const config = node.data.config || {};
         // 将节点Label也放入表单进行编辑
-        nodeForm.setFieldsValue({ ...config, _label: node.data.label });
+        if (nodeFormAutoSaveTimerRef.current) clearTimeout(nodeFormAutoSaveTimerRef.current);
+        try {
+            nodeFormProgrammaticSetRef.current = true;
+            nodeForm.resetFields();
+            nodeForm.setFieldsValue({ ...config, _label: node.data.label });
+        } finally {
+            nodeFormProgrammaticSetRef.current = false;
+        }
         setConfigFileId(config.file_id || null);
         setConfigSheet(config.sheet_name || null);
         setShowNodeConfig(true);
@@ -1078,6 +1338,36 @@ function App() {
         }
     };
 
+    const applyNodeConfigSilentlyForNode = (nodeId, allValues) => {
+        if (!nodeId) return;
+        const { _label, ...config } = allValues || {};
+
+        setNodes((nds) => nds.map((node) => {
+            if (node.id !== nodeId) return node;
+            return {
+                ...node,
+                data: {
+                    ...node.data,
+                    label: _label || node.data.label,
+                    config,
+                    description: getNodeDescription(node.data.type, config)
+                }
+            };
+        }));
+    };
+
+    const handleNodeFormValuesChange = (_changedValues, allValues) => {
+        if (nodeFormProgrammaticSetRef.current) return;
+        if (!showNodeConfig) return;
+        const nodeId = selectedNode?.id;
+        if (!nodeId) return;
+
+        if (nodeFormAutoSaveTimerRef.current) clearTimeout(nodeFormAutoSaveTimerRef.current);
+        nodeFormAutoSaveTimerRef.current = setTimeout(() => {
+            applyNodeConfigSilentlyForNode(nodeId, allValues);
+        }, 350);
+    };
+
     const deleteSelectedNode = () => {
         if (selectedNode) {
             setNodes((nds) => nds.filter((node) => node.id !== selectedNode.id));
@@ -1104,8 +1394,15 @@ function App() {
     useEffect(() => {
         return () => {
             if (topToastTimerRef.current) clearTimeout(topToastTimerRef.current);
+            if (nodeFormAutoSaveTimerRef.current) clearTimeout(nodeFormAutoSaveTimerRef.current);
         };
     }, []);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(HIDDEN_PRESET_WORKFLOWS_KEY, JSON.stringify(hiddenPresetWorkflowIds || []));
+        } catch { }
+    }, [hiddenPresetWorkflowIds]);
 
     const showTopGlassToast = useCallback((text) => {
         if (topToastTimerRef.current) clearTimeout(topToastTimerRef.current);
@@ -1209,6 +1506,10 @@ function App() {
         // 重置执行状态
         setNodeExecutionStatus({});
         setNodeResults({});
+        setLastExecutionLogs([]);
+        setShowNodeErrorDrawer(false);
+        setViewingNodeErrorId(null);
+        setAiErrorSuggestText('');
 
         // 设置所有节点为pending状态
         const initialStatus = {};
@@ -1218,10 +1519,51 @@ function App() {
         // 更新节点显示状态
         setNodes(nds => nds.map(n => ({
             ...n,
-            data: { ...n.data, executionStatus: 'pending', nodeId: n.id, onViewResult: handleViewNodeResult }
+            data: { ...n.data, executionStatus: 'pending', errorMessage: undefined, errorBubbleDismissed: false, nodeId: n.id, onViewResult: handleViewNodeResult, onViewError: handleViewNodeError, onDismissErrorBubble: handleDismissNodeErrorBubble }
         })));
 
         try {
+            const applyExecutionPayload = (payload) => {
+                if (!payload || typeof payload !== 'object') return;
+
+                if (Array.isArray(payload.logs)) setLastExecutionLogs(payload.logs);
+
+                // 更新节点状态
+                if (payload.node_status) {
+                    setNodeExecutionStatus(payload.node_status);
+                    setNodes(nds => nds.map(n => ({
+                        ...n,
+                        data: {
+                            ...n.data,
+                            executionStatus: payload.node_status[n.id] || 'pending',
+                            errorMessage: payload.node_results?.[n.id]?.error,
+                            errorBubbleDismissed: false,
+                            nodeId: n.id,
+                            onViewResult: handleViewNodeResult,
+                            onViewError: handleViewNodeError,
+                            onDismissErrorBubble: handleDismissNodeErrorBubble
+                        }
+                    })));
+                }
+
+                // 存储节点结果
+                if (payload.node_results) {
+                    setNodeResults(payload.node_results);
+                }
+
+                // 更新边的样式
+                setEdges(eds => eds.map(e => {
+                    const sourceStatus = payload.node_status?.[e.source];
+                    const targetStatus = payload.node_status?.[e.target];
+                    if (sourceStatus === 'success' && (targetStatus === 'success' || targetStatus === 'pending')) {
+                        return { ...e, style: { ...e.style, stroke: '#34C759', strokeWidth: 3 } };
+                    } else if (sourceStatus === 'error' || targetStatus === 'error') {
+                        return { ...e, style: { ...e.style, stroke: '#FF3B30', strokeWidth: 2 } };
+                    }
+                    return e;
+                }));
+            };
+
             const config = {
                 nodes: nodes.map(n => ({ id: n.id, type: n.data.type, label: n.data.label, config: n.data.config || {} })),
                 edges: edges.map(e => ({ source: e.source, target: e.target }))
@@ -1235,37 +1577,7 @@ function App() {
 
             const result = await workflowApi.execute(config, fileMapping);
 
-            // 更新节点状态
-            if (result.node_status) {
-                setNodeExecutionStatus(result.node_status);
-                setNodes(nds => nds.map(n => ({
-                    ...n,
-                    data: {
-                        ...n.data,
-                        executionStatus: result.node_status[n.id] || 'pending',
-                        errorMessage: result.node_results?.[n.id]?.error,
-                        nodeId: n.id,
-                        onViewResult: handleViewNodeResult
-                    }
-                })));
-            }
-
-            // 存储节点结果
-            if (result.node_results) {
-                setNodeResults(result.node_results);
-            }
-
-            // 更新边的样式（成功的节点之间的边标绿）
-            setEdges(eds => eds.map(e => {
-                const sourceStatus = result.node_status?.[e.source];
-                const targetStatus = result.node_status?.[e.target];
-                if (sourceStatus === 'success' && (targetStatus === 'success' || targetStatus === 'pending')) {
-                    return { ...e, style: { ...e.style, stroke: '#34C759', strokeWidth: 3 } };
-                } else if (sourceStatus === 'error' || targetStatus === 'error') {
-                    return { ...e, style: { ...e.style, stroke: '#FF3B30', strokeWidth: 2 } };
-                }
-                return e;
-            }));
+            applyExecutionPayload(result);
 
             if (result.success) {
                 setResult({
@@ -1279,7 +1591,40 @@ function App() {
                 message.error('执行失败: ' + (result.error || '未知错误'));
             }
         } catch (e) {
-            message.error('执行出错: ' + e.message);
+            const detail = e?.response?.data?.detail;
+            if (detail && typeof detail === 'object') {
+                // 失败时也要更新 node_status/node_results/logs，避免状态“滞后一轮”
+                if (Array.isArray(detail.logs)) setLastExecutionLogs(detail.logs);
+                if (detail.node_results) setNodeResults(detail.node_results);
+                if (detail.node_status) setNodeExecutionStatus(detail.node_status);
+                setNodes(nds => nds.map(n => ({
+                    ...n,
+                    data: {
+                        ...n.data,
+                        executionStatus: detail.node_status?.[n.id] || n.data.executionStatus || 'pending',
+                        errorMessage: detail.node_results?.[n.id]?.error,
+                        errorBubbleDismissed: false,
+                        nodeId: n.id,
+                        onViewResult: handleViewNodeResult,
+                        onViewError: handleViewNodeError,
+                        onDismissErrorBubble: handleDismissNodeErrorBubble
+                    }
+                })));
+                setEdges(eds => eds.map(ed => {
+                    const sourceStatus = detail.node_status?.[ed.source];
+                    const targetStatus = detail.node_status?.[ed.target];
+                    if (sourceStatus === 'success' && (targetStatus === 'success' || targetStatus === 'pending')) {
+                        return { ...ed, style: { ...ed.style, stroke: '#34C759', strokeWidth: 3 } };
+                    } else if (sourceStatus === 'error' || targetStatus === 'error') {
+                        return { ...ed, style: { ...ed.style, stroke: '#FF3B30', strokeWidth: 2 } };
+                    }
+                    return ed;
+                }));
+
+                message.error('执行失败: ' + (detail.error || '未知错误'));
+            } else {
+                message.error('执行出错: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+            }
         } finally {
             setExecuting(false);
         }
@@ -1349,6 +1694,155 @@ function App() {
             setSavingWorkflow(false);
         }
     }, [workflowName, workflowDescription, buildWorkflowConfigForSave]);
+
+    const applyWorkflowToCanvas = useCallback((workflowConfig) => {
+        const { nodes: flowNodes, edges: flowEdges } = workflowToReactFlow(workflowConfig);
+        if (!Array.isArray(flowNodes) || flowNodes.length === 0) {
+            message.warning('工作流为空或格式不正确');
+            return;
+        }
+        setNodes(flowNodes);
+        setEdges(Array.isArray(flowEdges) ? flowEdges : []);
+        setResult(null);
+        requestAnimationFrame(() => {
+            try {
+                reactFlowInstance?.fitView?.({ padding: 0.2, duration: 300 });
+            } catch (e) {
+                console.warn('[Workflow] fitView failed:', e);
+            }
+        });
+    }, [reactFlowInstance]);
+
+    const handleApplyWorkflowFromLibrary = useCallback(async ({ kind, workflow }) => {
+        try {
+            if (kind === 'preset') {
+                applyWorkflowToCanvas(workflow?.config);
+                message.success(`已加载预设工作流：${workflow?.name || workflow?.id || ''}`.trim());
+                return;
+            }
+            if (kind === 'saved') {
+                const workflowData = await workflowApi.get(workflow?.id);
+                applyWorkflowToCanvas(workflowData?.config);
+                message.success(`已加载自定义工作流：${workflow?.name || workflow?.id}`);
+            }
+        } catch (e) {
+            console.error('[Workflow] apply failed:', e);
+            message.error('工作流加载失败: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+        }
+    }, [applyWorkflowToCanvas]);
+
+    const handleDeleteWorkflowFromLibrary = useCallback(({ kind, workflow }) => {
+        const id = workflow?.id;
+        const name = workflow?.name || id || '';
+
+        if (kind === 'preset') {
+            Modal.confirm({
+                title: '删除预设工作流',
+                content: `确认从节点库隐藏预设“${name}”？（不会影响已放到画布上的工作流）`,
+                okText: '删除',
+                okButtonProps: { danger: true },
+                cancelText: '取消',
+                onOk: () => {
+                    if (!id) return;
+                    setHiddenPresetWorkflowIds((prev) => {
+                        const next = Array.isArray(prev) ? [...prev] : [];
+                        if (!next.includes(id)) next.push(id);
+                        return next;
+                    });
+                }
+            });
+            return;
+        }
+
+        if (kind === 'saved') {
+            Modal.confirm({
+                title: '删除自定义工作流',
+                content: `确认删除自定义工作流“${name}”？此操作不可恢复。`,
+                okText: '删除',
+                okButtonProps: { danger: true },
+                cancelText: '取消',
+                onOk: async () => {
+                    try {
+                        if (!id) return;
+                        await workflowApi.delete(id);
+                        const workflowData = await workflowApi.getList();
+                        setSavedWorkflows(workflowData.workflows || []);
+                        message.success('已删除');
+                    } catch (e) {
+                        message.error('删除失败: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+                    }
+                }
+            });
+        }
+    }, []);
+
+    const buildNodeErrorSuggestions = useCallback((node, errorText) => {
+        const nodeType = node?.data?.type;
+        const msg = String(errorText || '');
+        const suggestions = [];
+
+        if (nodeType === 'source' || nodeType === 'source_csv') {
+            suggestions.push('检查是否已选择文件；如果是 Excel，请确认已选择正确的 Sheet。');
+            suggestions.push('在左侧“文件资源”里先预览，确认表头/列名是否符合预期。');
+            if (/file_id|文件|not found|找不到/i.test(msg)) suggestions.push('如果提示找不到文件/文件为空，请重新选择文件并保存节点配置。');
+            if (/sheet|worksheet|工作表/i.test(msg)) suggestions.push('如果提示 Sheet 相关错误，请重新从下拉选择正确的 Sheet。');
+        }
+
+        if (nodeType === 'output' || nodeType === 'output_csv') {
+            suggestions.push('检查文件名/输出格式配置是否有效，避免包含非法字符。');
+        }
+
+        if (nodeType === 'code') {
+            suggestions.push('Python 节点只能使用上游输入的 DataFrame：`inputs[0]`、`inputs[1]`…，产出请赋值给 `result`。');
+            suggestions.push('如果是列名/变量名错误，请先 `print(df.columns)`（或在日志中输出列名）再调整。');
+        }
+
+        if (nodeType === 'reconcile') {
+            suggestions.push('对账核算需要两个输入：明细表（左）+ 汇总表（右），请确认有两条连线接入该节点。');
+            suggestions.push('确认已配置关联维度（join_keys）以及两边的金额列（明细金额列/汇总金额列）。');
+            suggestions.push('如果 join_keys 在汇总表不唯一（同一门店多行），会导致重复/放大：先在汇总表按 join_keys 聚合或去重，再对账。');
+        }
+
+        if (/sheet|worksheet|工作表/i.test(msg) || msg.includes('Sheet') || msg.includes('工作表')) {
+            suggestions.push('重新选择 Sheet；如不确定，可先选第一个 Sheet 验证是否能跑通。');
+        }
+
+        if (/keyerror|找不到|not in|不存在|columns/i.test(msg)) {
+            suggestions.push('检查列名是否与节点配置一致（注意全角/半角、空格、大小写）。');
+            suggestions.push('如果是对账/关联类节点，确认两边的关联键在两张表中都存在且类型一致。');
+        }
+
+        if (/nameerror|not defined/i.test(msg)) {
+            suggestions.push('这是代码节点变量作用域/变量名问题：确认你引用的是 `inputs[...]` 或你自己在脚本里定义过的变量。');
+        }
+
+        if (suggestions.length === 0) {
+            suggestions.push('打开错误抽屉查看日志，定位到具体报错节点与报错行。');
+            suggestions.push('检查该节点配置是否为空/未选择必要参数，然后再次执行。');
+        }
+
+        return suggestions;
+    }, []);
+
+    const handleDismissNodeErrorBubble = useCallback((nodeId) => {
+        if (!nodeId) return;
+        setNodes((nds) => nds.map((n) => {
+            if (n.id !== nodeId) return n;
+            return { ...n, data: { ...n.data, errorBubbleDismissed: true } };
+        }));
+    }, [setNodes]);
+
+    const handleViewNodeError = useCallback((nodeId) => {
+        const node = nodes.find(n => n.id === nodeId);
+        const err = nodeResults?.[nodeId]?.error || node?.data?.errorMessage;
+        if (!err) {
+            message.info('该节点暂无错误信息');
+            return;
+        }
+        setAiErrorSuggestText('');
+        setViewingNodeErrorId(nodeId);
+        setShowNodeErrorDrawer(true);
+    }, [nodes, nodeResults]);
 
     // 查看节点执行结果
     const handleViewNodeResult = useCallback((nodeId) => {
@@ -1890,6 +2384,7 @@ function App() {
     const renderNodeConfigForm = () => {
         if (!selectedNode) return null;
         const type = selectedNode.data.type;
+        const isSigningPerformancePreset = selectedNode?.data?.config?.python_code === PRESET_SIGNING_PERFORMANCE_PY;
 
         // 获取上游节点信息 (用于显示输入数据来源)
         const getUpstreamInfo = () => {
@@ -1962,6 +2457,7 @@ function App() {
                                         try { sheets = JSON.parse(sheets); } catch { sheets = []; }
                                     }
                                     const sheet = Array.isArray(sheets) ? sheets.find(s => s.name === sheetName) : null;
+                                    nodeInfo.fileId = config.file_id;
                                     nodeInfo.file = file.filename;
                                     nodeInfo.sheet = sheetName;
                                     nodeInfo.columns = sheet?.columns || [];
@@ -1982,6 +2478,15 @@ function App() {
         const allUpstreamNodes = getAllUpstreamNodes();
 
         const upstreamInfo = getUpstreamInfo();
+        const teamSourceNode = isSigningPerformancePreset
+            ? (
+                allUpstreamNodes.find(n => n?.isSource && n?.fileId && n?.sheet && Array.isArray(n?.columns) && n.columns.includes('办公室团队'))
+                || allUpstreamNodes.find(n => n?.isSource && n?.fileId && n?.sheet)
+                || null
+            )
+            : null;
+        const teamSourceReady = Boolean(teamSourceNode?.fileId && teamSourceNode?.sheet && Array.isArray(teamSourceNode?.columns) && teamSourceNode.columns.includes('办公室团队'));
+        const teamSelectOptionItems = (teamSelectOptions || []).map(t => ({ label: t, value: t }));
 
         // 显示上游输入信息（替代原来的Sheet选择器）
         const inputInfo = upstreamInfo.length > 0 ? (
@@ -2624,6 +3129,35 @@ function App() {
                         <div style={{ marginBottom: 8, color: '#f59e0b', fontSize: 12 }}>
                             ⚠️ 变量: inputs(列表), df(第一个输入), pd(pandas), 结果赋给result
                         </div>
+                        {isSigningPerformancePreset && (
+                            <>
+                                <Divider orientation="left">团队筛选</Divider>
+                                <Form.Item
+                                    label="办公室团队"
+                                    name="team_name"
+                                    tooltip="留空不过滤；选择/输入后仅输出该团队"
+                                    validateStatus={teamSourceReady ? undefined : 'warning'}
+                                    help={teamSourceReady ? null : '未找到办公室团队（请先连接提货表数据源，并确认包含“办公室团队”列）'}
+                                >
+                                    <Select
+                                        mode="tags"
+                                        placeholder="例如：邯郸刘洋"
+                                        style={iosSelectStyle}
+                                        dropdownStyle={{ borderRadius: 12 }}
+                                        popupClassName="ios-dropdown"
+                                        tokenSeparators={[',', '，']}
+                                        maxTagCount={1}
+                                        options={teamSelectOptionItems}
+                                        loading={teamSelectLoading}
+                                        notFoundContent={teamSelectLoading ? <Spin size="small" /> : null}
+                                        onDropdownVisibleChange={(open) => {
+                                            if (open && teamSourceReady) ensureTeamSelectOptions(teamSourceNode?.fileId, teamSourceNode?.sheet);
+                                        }}
+                                        disabled={!teamSourceReady}
+                                    />
+                                </Form.Item>
+                            </>
+                        )}
                         <Form.Item label="Python代码" name="python_code">
                             <Input.TextArea rows={12} style={{ fontFamily: 'monospace', fontSize: 13, background: '#1e1e1e', color: '#d4d4d4' }}
                                 placeholder={`# 示例:\ndf['total'] = df['a'] + df['b']\nresult = df`} />
@@ -2728,7 +3262,14 @@ function App() {
                                 节点库
                             </div>
                             <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px 12px', minHeight: 0 }}>
-                                <NodeToolbox onDragStart={onDragStartHandler} onAddNode={addNodeFromLibrary} savedWorkflows={savedWorkflows} />
+                                <NodeToolbox
+                                    onDragStart={onDragStartHandler}
+                                    onAddNode={addNodeFromLibrary}
+                                    savedWorkflows={savedWorkflows}
+                                    onApplyWorkflow={handleApplyWorkflowFromLibrary}
+                                    onDeleteWorkflow={handleDeleteWorkflowFromLibrary}
+                                    hiddenPresetWorkflowIds={hiddenPresetWorkflowIds}
+                                />
                             </div>
                         </div>
                     </div>
@@ -2848,7 +3389,7 @@ function App() {
                 mask={false}
                 rootClassName="node-config-drawer-glass"
                 extra={<Button type="primary" size="small" onClick={saveNodeConfig}>保存</Button>}>
-                <Form form={nodeForm} layout="vertical" className="node-config-form">
+                <Form form={nodeForm} layout="vertical" className="node-config-form" onValuesChange={handleNodeFormValuesChange}>
                     <Form.Item label="节点名称" name="_label" style={{ marginBottom: 24 }}>
                         <Input placeholder="输入节点名称" />
                     </Form.Item>
@@ -2857,6 +3398,164 @@ function App() {
                 <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1px solid #F2F2F7' }}>
                     <Button block danger icon={<DeleteOutlined />} onClick={deleteSelectedNode}>删除节点</Button>
                 </div>
+            </Drawer>
+
+            <Drawer
+                title="错误详情"
+                placement="right"
+                width={420}
+                onClose={() => setShowNodeErrorDrawer(false)}
+                open={showNodeErrorDrawer}
+                mask={false}
+                rootClassName="node-config-drawer-glass"
+            >
+                {(() => {
+                    const node = nodes.find(n => n.id === viewingNodeErrorId);
+                    const nodeType = node?.data?.type;
+                    const nodeTypeLabel = NODE_TYPES_CONFIG[nodeType]?.label || nodeType || '';
+                    const errObj = nodeResults?.[viewingNodeErrorId] || {};
+                    const err = errObj?.error || node?.data?.errorMessage || '';
+                    const tracebackText = errObj?.traceback || '';
+                    const suggestions = buildNodeErrorSuggestions(node, err);
+
+                    const handleAskAI = async () => {
+                        if (aiErrorSuggestLoading) return;
+                        setAiErrorSuggestLoading(true);
+                        try {
+                            const workflowConfig = {
+                                nodes: (nodes || []).map(n => ({ id: n.id, type: n.data.type, label: n.data.label, config: n.data.config || {} })),
+                                edges: (edges || []).map(e => ({ source: e.source, target: e.target }))
+                            };
+                            const resp = await aiApi.errorSuggest({
+                                node_id: viewingNodeErrorId,
+                                node_type: nodeType,
+                                node_label: node?.data?.label,
+                                node_config: node?.data?.config || {},
+                                error: String(err || ''),
+                                traceback: tracebackText || undefined,
+                                logs: Array.isArray(lastExecutionLogs) ? lastExecutionLogs : [],
+                                workflow_config: workflowConfig
+                            });
+                            setAiErrorSuggestText(String(resp?.suggestion || ''));
+                        } catch (e) {
+                            message.error('AI 建议获取失败: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+                        } finally {
+                            setAiErrorSuggestLoading(false);
+                        }
+                    };
+
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <div style={{ fontSize: 13, color: 'rgba(29,29,31,0.65)', fontWeight: 600 }}>节点</div>
+                                <div style={{ fontSize: 16, fontWeight: 800, color: 'rgba(29,29,31,0.92)' }}>
+                                    {node?.data?.label || viewingNodeErrorId || '-'}
+                                </div>
+                                {nodeTypeLabel && (
+                                    <div style={{ fontSize: 12, color: 'rgba(29,29,31,0.55)' }}>{nodeTypeLabel}</div>
+                                )}
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: 13, color: 'rgba(29,29,31,0.65)', fontWeight: 700, marginBottom: 8 }}>错误原因</div>
+                                <pre style={{
+                                    margin: 0,
+                                    padding: '12px 12px',
+                                    borderRadius: 14,
+                                    background: 'rgba(255,255,255,0.55)',
+                                    border: '1px solid rgba(0,0,0,0.08)',
+                                    backdropFilter: 'blur(12px) saturate(140%)',
+                                    WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+                                    color: 'rgba(29,29,31,0.9)',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    userSelect: 'text'
+                                }}>{String(err || '')}</pre>
+                                {tracebackText && (
+                                    <Collapse style={{ marginTop: 10, background: 'transparent' }}>
+                                        <Panel header="Python 异常栈（Traceback）" key="tb">
+                                            <pre style={{
+                                                margin: 0,
+                                                padding: '10px 10px',
+                                                borderRadius: 14,
+                                                background: 'rgba(255,255,255,0.55)',
+                                                border: '1px solid rgba(0,0,0,0.08)',
+                                                backdropFilter: 'blur(12px) saturate(140%)',
+                                                WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+                                                color: 'rgba(29,29,31,0.86)',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-word',
+                                                userSelect: 'text'
+                                            }}>{String(tracebackText)}</pre>
+                                        </Panel>
+                                    </Collapse>
+                                )}
+                            </div>
+
+                            <div>
+                                <div style={{ fontSize: 13, color: 'rgba(29,29,31,0.65)', fontWeight: 700, marginBottom: 8 }}>解决方式</div>
+                                <div style={{
+                                    padding: '12px 12px',
+                                    borderRadius: 14,
+                                    background: 'rgba(255,255,255,0.55)',
+                                    border: '1px solid rgba(0,0,0,0.08)',
+                                    backdropFilter: 'blur(12px) saturate(140%)',
+                                    WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+                                    color: 'rgba(29,29,31,0.9)',
+                                    userSelect: 'text'
+                                }}>
+                                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                        {suggestions.map((s, idx) => (
+                                            <li key={idx} style={{ marginBottom: 6, lineHeight: 1.45 }}>{s}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                                    <Button size="small" type="primary" loading={aiErrorSuggestLoading} onClick={handleAskAI} style={{ background: '#007AFF', borderColor: '#007AFF' }}>
+                                        AI 生成更具体建议
+                                    </Button>
+                                </div>
+                                {aiErrorSuggestText && (
+                                    <pre style={{
+                                        marginTop: 10,
+                                        marginBottom: 0,
+                                        padding: '12px 12px',
+                                        borderRadius: 14,
+                                        background: 'rgba(255,255,255,0.55)',
+                                        border: '1px solid rgba(0,0,0,0.08)',
+                                        backdropFilter: 'blur(12px) saturate(140%)',
+                                        WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+                                        color: 'rgba(29,29,31,0.9)',
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                        userSelect: 'text'
+                                    }}>{aiErrorSuggestText}</pre>
+                                )}
+                            </div>
+
+                            {Array.isArray(lastExecutionLogs) && lastExecutionLogs.length > 0 && (
+                                <div>
+                                    <div style={{ fontSize: 13, color: 'rgba(29,29,31,0.65)', fontWeight: 700, marginBottom: 8 }}>执行日志</div>
+                                    <pre style={{
+                                        margin: 0,
+                                        maxHeight: 260,
+                                        overflow: 'auto',
+                                        padding: '12px 12px',
+                                        borderRadius: 14,
+                                        background: 'rgba(255,255,255,0.55)',
+                                        border: '1px solid rgba(0,0,0,0.08)',
+                                        backdropFilter: 'blur(12px) saturate(140%)',
+                                        WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+                                        color: 'rgba(29,29,31,0.86)',
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                        userSelect: 'text'
+                                    }}>{lastExecutionLogs.join('\n')}</pre>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
             </Drawer>
 
             <Modal

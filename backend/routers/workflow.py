@@ -81,6 +81,18 @@ async def get_workflow(workflow_id: str):
     return workflow
 
 
+@router.delete("/{workflow_id}")
+async def delete_workflow(workflow_id: str):
+    """删除工作流"""
+    existing = await workflow_engine.get_workflow(workflow_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    deleted = await workflow_engine.delete_workflow(workflow_id)
+    if not deleted:
+        raise HTTPException(status_code=400, detail="删除失败")
+    return {"message": "工作流已删除"}
+
+
 @router.post("/execute")
 async def execute_workflow(request: WorkflowExecuteRequest):
     """
@@ -98,11 +110,15 @@ async def execute_workflow(request: WorkflowExecuteRequest):
         
         if result.get("success"):
             return result
-        else:
-            raise HTTPException(status_code=400, detail=result.get("error", "执行失败"))
-            
+
+        # 失败时保留结构化信息（node_status/node_results/logs），便于前端定位到具体报错节点
+        raise HTTPException(status_code=400, detail=result)
+
+    except HTTPException:
+        raise
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"执行失败: {str(e)}")
+        raise HTTPException(status_code=400, detail={"success": False, "error": f"执行失败: {str(e)}"})
 
 
 @router.get("/history/list")

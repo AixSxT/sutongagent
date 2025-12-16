@@ -113,9 +113,24 @@ class WorkflowEngine:
                         
                         # 记录节点结果（用于前端预览）
                         node_status[node_id] = 'success'
+
+                        def _safe_records(df: pd.DataFrame, limit: Optional[int] = None):
+                            view = df.head(limit).copy() if limit else df.copy()
+                            # Categorical 列不能直接 fillna("")（"" 不是其合法类别），需要先添加空类别
+                            for col in view.columns:
+                                try:
+                                    if pd.api.types.is_categorical_dtype(view[col].dtype):
+                                        if '' not in view[col].cat.categories:
+                                            view[col] = view[col].cat.add_categories([''])
+                                        view[col] = view[col].fillna('')
+                                except Exception:
+                                    # 如果某些扩展类型不支持上述处理，退化为后续统一 fillna
+                                    pass
+                            return view.fillna("").to_dict(orient="records")
+
                         node_results[node_id] = {
                             "columns": result_df.columns.tolist(),
-                            "data": result_df.fillna("").to_dict(orient="records"),  # 返回全部数据
+                            "data": _safe_records(result_df),  # 返回全部数据
                             "total_rows": len(result_df)
                         }
                         
@@ -123,7 +138,7 @@ class WorkflowEngine:
                             output_file = self._save_output(result_df, node_config, node_type)
                             final_preview = {
                                 "columns": result_df.columns.tolist(),
-                                "data": result_df.head(100).fillna("").to_dict(orient="records"),
+                                "data": _safe_records(result_df, limit=100),
                                 "total_rows": len(result_df)
                             }
                     else:
@@ -131,7 +146,8 @@ class WorkflowEngine:
                         
                 except Exception as node_error:
                     node_status[node_id] = 'error'
-                    node_results[node_id] = {"error": str(node_error)}
+                    import traceback
+                    node_results[node_id] = {"error": str(node_error), "traceback": traceback.format_exc()}
                     context.log(f"节点 {node_label} 执行失败: {str(node_error)}")
                     raise node_error  # 继续抛出，中断工作流
             
@@ -692,10 +708,12 @@ class WorkflowEngine:
         detail_grouped = detail_grouped.rename(columns={left_column: '明细汇总金额'})
         logger.debug(f"[Reconcile] 明细汇总后: {len(detail_grouped)} 行")
         
-        # 2. 准备汇总表（只取关联键+金额列）
+        # 2. 准备汇总表（按关联键汇总，避免一对多 merge 导致重复行）
         summary_cols = join_keys + [right_column]
-        summary_renamed = summary_df[summary_cols].copy()
-        summary_renamed = summary_renamed.rename(columns={right_column: '汇总表金额'})
+        summary_view = summary_df[summary_cols].copy()
+        summary_view[right_column] = pd.to_numeric(summary_view[right_column], errors='coerce')
+        summary_grouped = summary_view.groupby(join_keys)[right_column].sum().reset_index()
+        summary_renamed = summary_grouped.rename(columns={right_column: '汇总表金额'})
         
         # 3. 统一关联键类型为字符串
         for key in join_keys:
@@ -745,10 +763,14 @@ class WorkflowEngine:
             "inputs": input_dfs,
             "df": input_dfs[0] if input_dfs else None, 
             "pd": pd,
+            "config": config or {},
             "result": None
         }
         
-        exec(code, {}, local_scope)
+        # 注意：在 Python 3 中，list/dict/set comprehension 会在独立作用域里执行；
+        # 当 exec 使用不同的 globals/locals 时，comprehension 可能无法访问 locals 中的变量（如 df_tihuo）。
+        # 这里使用同一个作用域字典作为 globals/locals，避免出现 NameError。
+        exec(code, local_scope, local_scope)
         result = local_scope.get('result')
         if not isinstance(result, pd.DataFrame):
             raise ValueError("代码节点必须将结果DataFrame赋值给 'result' 变量")
@@ -892,6 +914,18 @@ class WorkflowEngine:
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (workflow_id, name, description, json.dumps(config, ensure_ascii=False)))
             await db.commit()
+
+    async def delete_workflow(self, workflow_id: str) -> bool:
+        import aiosqlite
+        from database import DATABASE_PATH
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cursor = await db.execute("DELETE FROM execution_history WHERE workflow_id = ?", (workflow_id,))
+            await cursor.close()
+            cursor = await db.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+            deleted = cursor.rowcount > 0
+            await cursor.close()
+            await db.commit()
+            return deleted
     
     async def save_execution_history(self, workflow_id: str, input_files: List, output_file: str, status: str, result_summary: str) -> str:
         import aiosqlite

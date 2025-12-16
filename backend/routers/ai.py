@@ -26,6 +26,18 @@ class ExplainWorkflowRequest(BaseModel):
     workflow_config: Dict[str, Any]
 
 
+class ErrorSuggestRequest(BaseModel):
+    """错误建议请求"""
+    node_id: Optional[str] = None
+    node_type: Optional[str] = None
+    node_label: Optional[str] = None
+    node_config: Optional[Dict[str, Any]] = None
+    error: str
+    traceback: Optional[str] = None
+    logs: Optional[List[str]] = None
+    workflow_config: Optional[Dict[str, Any]] = None
+
+
 # ============ 新增：AI对话模式 ============
 
 class ChatStartRequest(BaseModel):
@@ -196,3 +208,29 @@ async def explain_workflow(request: ExplainWorkflowRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成解释失败: {str(e)}")
+
+
+@router.post("/error-suggest")
+async def error_suggest(request: ErrorSuggestRequest):
+    """
+    基于节点错误信息生成更具体的排查/修复建议（可选调用 AI）。
+    """
+    if not request.error.strip():
+        raise HTTPException(status_code=400, detail="错误信息不能为空")
+
+    payload = {
+        "node_id": request.node_id,
+        "node_type": request.node_type,
+        "node_label": request.node_label,
+        "node_config": request.node_config or {},
+        "error": request.error,
+        "traceback": request.traceback,
+        "logs_tail": (request.logs or [])[-30:],
+        "workflow_config": request.workflow_config,
+    }
+
+    try:
+        suggestion = await ai_service.suggest_error_fix(payload)
+        return {"suggestion": suggestion}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成建议失败: {str(e)}")

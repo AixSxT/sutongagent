@@ -141,4 +141,40 @@ class AIService:
         except:
             return "无法生成解释"
 
+    async def suggest_error_fix(self, payload: Dict[str, Any]) -> str:
+        """
+        基于节点类型/配置/错误信息生成修复建议（用于前端错误抽屉）。
+        不影响现有生成/对话能力，仅增加一个独立能力。
+        """
+        prompt = (
+            "你是一个 Excel 工作流/数据处理调试专家。请根据以下信息给出“可执行”的排查与修复建议。\n"
+            "要求：\n"
+            "1) 先用 1 句话总结根因猜测；\n"
+            "2) 给出 3-6 条具体操作建议（尽量对应到界面配置：文件/Sheet/列名/关联键/代码节点 inputs/result 等）；\n"
+            "3) 如可能，给出 1 条最小影响的替代方案。\n\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": "你是严谨的调试助手，只输出中文建议，不要输出代码块以外的无关内容。"},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 800,
+                        "temperature": 0.2
+                    }
+                )
+                if response.status_code == 200:
+                    return response.json()["choices"][0]["message"]["content"]
+                return f"AI 建议生成失败（HTTP {response.status_code}）"
+        except Exception as e:
+            logger.error(f"AI suggest_error_fix failed: {e}")
+            return "AI 建议生成失败（服务不可用或配置缺失）"
+
 ai_service = AIService()
