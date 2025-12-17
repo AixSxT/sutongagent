@@ -29,6 +29,14 @@ class WorkflowExecuteRequest(BaseModel):
     workflow_config: Dict[str, Any]
     file_mapping: Dict[str, str]  # file_id -> file_id（用于查找实际路径）
 
+class WorkflowPreviewNodeRequest(BaseModel):
+    """预览指定节点输出（样本执行）请求"""
+    workflow_config: Dict[str, Any]
+    file_mapping: Dict[str, str]
+    node_id: str
+    source_rows: Optional[int] = 600  # 数据源最多读取行数
+    display_rows: Optional[int] = 50  # 返回展示行数
+
 
 @router.post("/save")
 async def save_workflow(request: WorkflowSaveRequest):
@@ -119,6 +127,34 @@ async def execute_workflow(request: WorkflowExecuteRequest):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail={"success": False, "error": f"执行失败: {str(e)}"})
+
+
+@router.post("/preview-node")
+async def preview_node(request: WorkflowPreviewNodeRequest):
+    """
+    预览指定节点的输出（样本执行）：
+    - 数据源最多读取 source_rows 行（默认600）
+    - 返回 display_rows 行（默认50）与统计信息
+    """
+    try:
+        result = await workflow_engine.preview_node(
+            request.workflow_config,
+            request.file_mapping,
+            request.node_id,
+            source_rows=int(request.source_rows or 600),
+            display_rows=int(request.display_rows or 50)
+        )
+
+        if result.get("success"):
+            return result
+
+        raise HTTPException(status_code=400, detail=result)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"success": False, "error": f"预览失败: {str(e)}"})
 
 
 @router.get("/history/list")

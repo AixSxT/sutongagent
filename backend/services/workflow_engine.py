@@ -172,6 +172,192 @@ class WorkflowEngine:
                 "node_results": node_results
             }
 
+    async def preview_node(
+        self,
+        workflow_config: Dict,
+        file_mapping: Dict[str, str],
+        node_id: str,
+        source_rows: int = 600,
+        display_rows: int = 50
+    ) -> Dict:
+        """
+        预览指定节点的输出（样本执行）：
+        - 仅执行该节点的上游依赖
+        - 数据源节点最多读取 source_rows 行
+        - 返回该节点 display_rows 行抽样、以及简单统计
+        """
+        context = WorkflowContext()
+        nodes = workflow_config.get("nodes", [])
+        edges = workflow_config.get("edges", [])
+
+        node_map = {node['id']: node for node in nodes if isinstance(node, dict) and 'id' in node}
+        if node_id not in node_map:
+            return {"success": False, "error": f"预览失败: 找不到节点 {node_id}"}
+
+        # 1) 仅保留目标节点的上游依赖（包含自身）
+        required = {node_id}
+        changed = True
+        while changed:
+            changed = False
+            for e in edges:
+                src = e.get('source')
+                tgt = e.get('target')
+                if tgt in required and src and src not in required:
+                    required.add(src)
+                    changed = True
+
+        # 2) 拓扑排序（限制在 required 子图）
+        adj = {nid: [] for nid in required}
+        in_degree = {nid: 0 for nid in required}
+        for e in edges:
+            src = e.get('source')
+            tgt = e.get('target')
+            if src in required and tgt in required:
+                adj[src].append(tgt)
+                in_degree[tgt] += 1
+
+        queue = [nid for nid in required if in_degree.get(nid, 0) == 0]
+        execution_order = []
+        while queue:
+            nid = queue.pop(0)
+            execution_order.append(nid)
+            for neighbor in adj.get(nid, []):
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        if node_id not in execution_order:
+            return {"success": False, "error": "预览失败: 工作流存在环或依赖不完整，无法得到执行顺序"}
+
+        def _safe_records(df: pd.DataFrame, limit: int):
+            view = df.head(limit).copy()
+            for col in view.columns:
+                try:
+                    if pd.api.types.is_categorical_dtype(view[col].dtype):
+                        if '' not in view[col].cat.categories:
+                            view[col] = view[col].cat.add_categories([''])
+                        view[col] = view[col].fillna('')
+                except Exception:
+                    pass
+            return view.fillna("").to_dict(orient="records")
+
+        # 3) 执行到目标节点（样本）
+        node_status = {nid: 'pending' for nid in required}
+        node_results = {}
+        try:
+            for nid in execution_order:
+                node = node_map.get(nid)
+                if not node:
+                    continue
+
+                node_data = node.get('data') if isinstance(node, dict) and 'data' in node else node
+                node_type = (node_data or {}).get('type')
+                node_label = (node_data or {}).get('label', node_type)
+                node_config = (node_data or {}).get('config', {}) or {}
+
+                context.log(f"[Preview] 开始执行节点: {node_label} ({nid})")
+
+                input_dfs = []
+                for e in edges:
+                    if e.get('target') == nid:
+                        src_id = e.get('source')
+                        df = context.get_result(src_id)
+                        if df is not None:
+                            input_dfs.append(df)
+
+                result_df = await self._execute_node_by_type_preview(
+                    node_type=node_type,
+                    config=node_config,
+                    input_dfs=input_dfs,
+                    context=context,
+                    file_mapping=file_mapping,
+                    source_rows=source_rows
+                )
+
+                if result_df is not None:
+                    context.set_result(nid, result_df)
+                    node_status[nid] = 'success'
+                    node_results[nid] = {
+                        "columns": result_df.columns.tolist(),
+                        "total_rows": len(result_df)
+                    }
+                else:
+                    node_status[nid] = 'success'
+
+                if nid == node_id:
+                    break
+
+            df = context.get_result(node_id)
+            if df is None:
+                return {"success": False, "error": "预览失败: 该节点无输出或上游未提供数据", "logs": context._logs}
+
+            # 4) 统计 + 抽样（对账优先看差异）
+            node_data = node_map[node_id].get('data') if 'data' in node_map[node_id] else node_map[node_id]
+            node_type = (node_data or {}).get('type')
+            node_config = (node_data or {}).get('config', {}) or {}
+
+            stats: Dict[str, Any] = {
+                "rows_total": int(len(df)),
+                "columns_total": int(len(df.columns)),
+                "source_rows": int(source_rows),
+                "display_rows": int(display_rows),
+                "note": f"预览基于上游最多 {source_rows} 行样本执行"
+            }
+
+            sample_df = df
+            if node_type == 'reconcile':
+                tolerance = float(node_config.get('tolerance', 0) or 0)
+                if '差额' in df.columns:
+                    abs_diff = pd.to_numeric(df['差额'], errors='coerce').fillna(0).abs()
+                    stats.update({
+                        "tolerance": tolerance,
+                        "diff_count": int((abs_diff > tolerance).sum()),
+                        "match_count": int((abs_diff <= tolerance).sum()),
+                        "sum_abs_diff": float(abs_diff.sum()),
+                        "max_abs_diff": float(abs_diff.max() if len(abs_diff) else 0)
+                    })
+                    sample_df = df.assign(_abs_diff=abs_diff).sort_values('_abs_diff', ascending=False).drop(columns=['_abs_diff'])
+                    diff_view = sample_df[abs_diff > tolerance]
+                    if len(diff_view) > 0:
+                        sample_df = diff_view
+                elif '核算结果' in df.columns:
+                    s = df['核算结果'].astype(str)
+                    diff_mask = s.str.contains('不一致')
+                    stats.update({
+                        "diff_count": int(diff_mask.sum()),
+                        "match_count": int((~diff_mask).sum())
+                    })
+                    if diff_mask.any():
+                        sample_df = df[diff_mask]
+
+            preview_payload = {
+                "columns": df.columns.tolist(),
+                "data": _safe_records(sample_df, display_rows),
+                "total_rows": len(df)
+            }
+
+            return {
+                "success": True,
+                "node_id": node_id,
+                "node_type": node_type,
+                "stats": stats,
+                "preview": preview_payload,
+                "logs": context._logs,
+                "node_status": node_status,
+                "node_results": node_results
+            }
+        except Exception as e:
+            logger.error(f"节点预览失败: {str(e)}")
+            import traceback
+            return {
+                "success": False,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "logs": context._logs,
+                "node_status": node_status,
+                "node_results": node_results
+            }
+
     async def _execute_node_by_type(self, node_type: str, config: Dict, input_dfs: List[pd.DataFrame], context: WorkflowContext, file_mapping: Dict) -> Optional[pd.DataFrame]:
         """根据节点类型执行具体逻辑"""
         
@@ -260,6 +446,67 @@ class WorkflowEngine:
         
         return None
 
+    async def _execute_node_by_type_preview(
+        self,
+        node_type: str,
+        config: Dict,
+        input_dfs: List[pd.DataFrame],
+        context: WorkflowContext,
+        file_mapping: Dict,
+        source_rows: int
+    ) -> Optional[pd.DataFrame]:
+        """预览模式：数据源读取限制行数，避免全量读取。"""
+        if node_type == 'source':
+            return self._execute_source_limited(config, file_mapping, source_rows)
+        if node_type == 'source_csv':
+            return self._execute_source_csv_limited(config, file_mapping, source_rows)
+
+        # 预览不支持 AI 节点（可能很慢/有副作用）
+        if node_type == 'ai_agent':
+            raise ValueError("预览暂不支持 AI 节点")
+
+        # 其余节点复用原执行逻辑
+        return await self._execute_node_by_type(node_type, config, input_dfs, context, file_mapping)
+
+    def _execute_source_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
+        file_id = config.get('file_id')
+        mapped_id = file_mapping.get(file_id, file_id)
+
+        for f in os.listdir(UPLOAD_DIR):
+            if f.startswith(mapped_id):
+                file_path = os.path.join(UPLOAD_DIR, f)
+                sheet_name = config.get('sheet_name', 0)
+                header_row = config.get('header_row', 1) - 1
+                skip_rows = config.get('skip_rows', 0)
+
+                try:
+                    sheet_name = int(sheet_name)
+                except Exception:
+                    pass
+
+                return pd.read_excel(
+                    file_path,
+                    sheet_name=sheet_name,
+                    header=header_row,
+                    skiprows=range(1, skip_rows + 1) if skip_rows else None,
+                    nrows=int(nrows) if nrows else None
+                )
+
+        raise FileNotFoundError(f"找不到文件: {file_id}")
+
+    def _execute_source_csv_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
+        file_id = config.get('file_id')
+        mapped_id = file_mapping.get(file_id, file_id)
+
+        for f in os.listdir(UPLOAD_DIR):
+            if f.startswith(mapped_id):
+                file_path = os.path.join(UPLOAD_DIR, f)
+                delimiter = config.get('delimiter', ',')
+                encoding = config.get('encoding', 'utf-8')
+                return pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, nrows=int(nrows) if nrows else None)
+
+        raise FileNotFoundError(f"找不到文件: {file_id}")
+
     # ========== 数据源实现 ==========
     def _execute_source(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
@@ -304,7 +551,7 @@ class WorkflowEngine:
         # 筛选
         filter_expr = config.get('filter_code')
         if filter_expr:
-            df = df.query(filter_expr)
+            df = df.query(self._normalize_filter_expr(filter_expr, df))
         
         # 删除列
         drop_cols = config.get('drop_columns', [])
@@ -341,6 +588,65 @@ class WorkflowEngine:
             df = df.sort_values(by=sort_by, ascending=(sort_order == 'asc'))
             
         return df
+
+    def _normalize_filter_expr(self, expr: Any, df: pd.DataFrame) -> str:
+        """
+        兼容用户更接近“Excel 直觉”的写法（不影响原有 pandas query 语法）：
+        - 支持 `办公室团队=邯郸刘洋` → `办公室团队 == '邯郸刘洋'`
+        - 支持 `col=123` → `col == 123`
+        - 仅把“单个等号”替换为“==”（不影响 >=/<=/!=/==）
+        - 对 `==/!=` 右侧的裸文本（非数字、非列名、非 True/False/None、非引号包裹）自动加引号
+        """
+        raw = '' if expr is None else str(expr)
+        s = raw.strip()
+        if not s:
+            return s
+
+        # 全角符号兼容
+        s = s.replace('＝', '=')
+
+        # 1) 把“单个等号”替换为“==”
+        s = re.sub(r'(?<![<>!=])=(?![=])', '==', s)
+
+        # 2) 对比较右侧的裸文本自动加引号（尽量不破坏原 query）
+        cols = set(map(str, getattr(df, 'columns', [])))
+        keywords = {'True', 'False', 'None'}
+
+        def is_number_token(tok: str) -> bool:
+            t = tok.strip()
+            if not t:
+                return False
+            # 形如 00123 更可能是字符串
+            if re.fullmatch(r'0\d+', t):
+                return False
+            try:
+                float(t)
+                return True
+            except Exception:
+                return False
+
+        def repl(m: re.Match) -> str:
+            op = m.group(1)
+            val = m.group(2)
+            if val is None:
+                return m.group(0)
+            v = val.strip()
+            if not v:
+                return m.group(0)
+            if v[0] in ("'", '"') or v.startswith('@'):
+                return f"{op} {val}"
+            if v in keywords:
+                return f"{op} {val}"
+            if v in cols:
+                return f"{op} {val}"
+            if is_number_token(v):
+                return f"{op} {val}"
+            return f"{op} '{v}'"
+
+        # 只处理 `== something` / `!= something` 这种简单右值
+        s = re.sub(r'(==|!=)\s*([A-Za-z0-9_\u4e00-\u9fff\.\-]+)', repl, s)
+
+        return s
 
     def _execute_type_convert(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
         df = df.copy()
@@ -667,36 +973,59 @@ class WorkflowEngine:
         """
         # 兼容多种配置格式
         join_keys = config.get('join_keys')
-        if not join_keys:
-            # 旧版格式兼容
-            detail_key = config.get('detail_key')
-            if detail_key:
-                join_keys = [detail_key] if isinstance(detail_key, str) else detail_key
+        detail_keys = config.get('detail_keys') or config.get('detail_key')
+        summary_keys = config.get('summary_keys') or config.get('summary_key')
+        if (detail_keys and summary_keys) and not join_keys:
+            # 支持左右键不同名：detail_keys/summary_keys
+            join_keys = None
+        elif not join_keys:
+            # 旧版格式兼容（同名键）
+            if detail_keys:
+                join_keys = [detail_keys] if isinstance(detail_keys, str) else detail_keys
         
         left_column = config.get('left_column') or config.get('detail_amount')
         right_column = config.get('right_column') or config.get('summary_amount')
         output_mode = config.get('output_mode', 'diff_only')
         tolerance = float(config.get('tolerance', 0))
         
-        if not join_keys:
-            raise ValueError("对账核算必须指定关联键 (join_keys 或 detail_key)")
+        if not join_keys and not (detail_keys and summary_keys):
+            raise ValueError("对账核算必须指定关联键 (join_keys) 或左右键映射 (detail_keys + summary_keys)")
         if not left_column:
             raise ValueError("对账核算必须指定明细表金额列 (left_column 或 detail_amount)")
         if not right_column:
             raise ValueError("对账核算必须指定汇总表金额列 (right_column 或 summary_amount)")
         
-        # 确保join_keys是列表
-        if isinstance(join_keys, str):
-            join_keys = [join_keys]
-        
-        logger.info(f"[Reconcile] 关联键: {join_keys}, 明细列: {left_column}, 汇总列: {right_column}")
-        
-        # 验证列存在
-        for key in join_keys:
-            if key not in detail_df.columns:
-                raise ValueError(f"对账失败: 明细表中找不到关联列 '{key}'。现有列: {list(detail_df.columns)}")
-            if key not in summary_df.columns:
-                raise ValueError(f"对账失败: 汇总表中找不到关联列 '{key}'。现有列: {list(summary_df.columns)}")
+        use_key_mapping = bool(detail_keys and summary_keys and not join_keys)
+        if use_key_mapping:
+            if isinstance(detail_keys, str):
+                detail_keys = [detail_keys]
+            if isinstance(summary_keys, str):
+                summary_keys = [summary_keys]
+            if not isinstance(detail_keys, list) or not isinstance(summary_keys, list):
+                raise ValueError("对账核算左右键映射必须为列表/字符串 (detail_keys/summary_keys)")
+            if len(detail_keys) != len(summary_keys):
+                raise ValueError(f"对账核算左右键映射列数必须一致: detail_keys={detail_keys}, summary_keys={summary_keys}")
+            # 验证列存在
+            for key in detail_keys:
+                if key not in detail_df.columns:
+                    raise ValueError(f"对账失败: 明细表中找不到关联列 '{key}'。现有列: {list(detail_df.columns)}")
+            for key in summary_keys:
+                if key not in summary_df.columns:
+                    raise ValueError(f"对账失败: 汇总表中找不到关联列 '{key}'。现有列: {list(summary_df.columns)}")
+            logger.info(f"[Reconcile] 左右键映射: 明细{detail_keys} -> 汇总{summary_keys}, 明细列: {left_column}, 汇总列: {right_column}")
+        else:
+            # 确保join_keys是列表
+            if isinstance(join_keys, str):
+                join_keys = [join_keys]
+            if not isinstance(join_keys, list) or not join_keys:
+                raise ValueError("对账核算必须指定关联键 (join_keys 或 detail_key)")
+            logger.info(f"[Reconcile] 关联键: {join_keys}, 明细列: {left_column}, 汇总列: {right_column}")
+            # 验证列存在
+            for key in join_keys:
+                if key not in detail_df.columns:
+                    raise ValueError(f"对账失败: 明细表中找不到关联列 '{key}'。现有列: {list(detail_df.columns)}")
+                if key not in summary_df.columns:
+                    raise ValueError(f"对账失败: 汇总表中找不到关联列 '{key}'。现有列: {list(summary_df.columns)}")
         
         if left_column not in detail_df.columns:
             raise ValueError(f"对账失败: 明细表中找不到金额列 '{left_column}'。现有列: {list(detail_df.columns)}")
@@ -704,27 +1033,36 @@ class WorkflowEngine:
             raise ValueError(f"对账失败: 汇总表中找不到金额列 '{right_column}'。现有列: {list(summary_df.columns)}")
         
         # 1. 对明细表分组汇总
-        detail_grouped = detail_df.groupby(join_keys)[left_column].sum().reset_index()
+        detail_group_keys = detail_keys if use_key_mapping else join_keys
+        summary_group_keys = summary_keys if use_key_mapping else join_keys
+
+        detail_grouped = detail_df.groupby(detail_group_keys)[left_column].sum().reset_index()
         detail_grouped = detail_grouped.rename(columns={left_column: '明细汇总金额'})
         logger.debug(f"[Reconcile] 明细汇总后: {len(detail_grouped)} 行")
         
         # 2. 准备汇总表（按关联键汇总，避免一对多 merge 导致重复行）
-        summary_cols = join_keys + [right_column]
+        summary_cols = summary_group_keys + [right_column]
         summary_view = summary_df[summary_cols].copy()
         summary_view[right_column] = pd.to_numeric(summary_view[right_column], errors='coerce')
-        summary_grouped = summary_view.groupby(join_keys)[right_column].sum().reset_index()
+        summary_grouped = summary_view.groupby(summary_group_keys)[right_column].sum().reset_index()
         summary_renamed = summary_grouped.rename(columns={right_column: '汇总表金额'})
+
+        # 2.1 若左右键不同名：将汇总表的键列重命名为明细键列名，以便 merge
+        if use_key_mapping:
+            rename_key_map = {sk: dk for dk, sk in zip(detail_group_keys, summary_group_keys)}
+            summary_renamed = summary_renamed.rename(columns=rename_key_map)
         
         # 3. 统一关联键类型为字符串
-        for key in join_keys:
+        for key in (detail_group_keys or []):
             detail_grouped[key] = detail_grouped[key].astype(str)
-            summary_renamed[key] = summary_renamed[key].astype(str)
+            if key in summary_renamed.columns:
+                summary_renamed[key] = summary_renamed[key].astype(str)
         
         # 4. 合并对比
         merged = pd.merge(
             detail_grouped, 
             summary_renamed, 
-            on=join_keys, 
+            on=detail_group_keys, 
             how='outer'
         )
         

@@ -1,4 +1,4 @@
-/* RaycastHomePage.css */
+/* src/components/RaycastHomePage.css */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 .rc-home-container {
@@ -6,17 +6,25 @@
   background-color: #080808; /* 深黑色背景 */
   color: #ffffff;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  min-height: 100vh;
+  
+  /* --- 布局调整 --- */
+  /* 不再需要 fixed 全屏，因为它现在是 App Content 的一部分 */
+  width: 100%;
+  /* 让父容器（App.jsx 的 search view）负责滚动，避免双重滚动容器 */
+  height: auto;
+  min-height: calc(100vh - var(--global-nav-offset, 100px)); /* 与全局导航占位对齐 */
+  
+  overflow: visible;
+  scroll-behavior: smooth;
   position: relative;
-  overflow-x: hidden;
-  /* 强制覆盖 Ant Design 的默认亮色主题变量 */
+  
   --ant-primary-color: #FF6363;
 }
 
-/* 顶部红光流溢效果 */
+/* 顶部红光流溢效果 (固定背景) */
 .rc-bg-glow-top {
-  position: absolute;
-  top: -300px;
+  position: fixed; /* 固定在窗口，制造视差 */
+  top: -240px;     /* 稍微调整位置，避开 Header */
   left: 50%;
   transform: translateX(-50%);
   width: 100%;
@@ -27,108 +35,31 @@
   z-index: 0;
 }
 
-/* ================= 顶部导航栏 ================= */
-.rc-header {
-  position: fixed;
-  top: 0;
-  left: 0;
+/* --- 分屏容器 --- */
+.rc-section {
+  min-height: calc(100vh - var(--global-nav-offset, 100px)); /* 与全局导航占位对齐 */
   width: 100%;
-  height: 64px;
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  align-items: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  /* 毛玻璃效果 */
-  background: rgba(8, 8, 8, 0.6);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  z-index: 100;
-}
-
-.rc-nav-content {
-  width: 100%;
-  max-width: 1200px;
-  padding: 0 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.rc-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 18px;
-  letter-spacing: -0.02em;
-}
-
-.rc-nav-links {
-  display: flex;
-  gap: 28px;
-}
-
-.rc-nav-links a {
-  color: rgba(255, 255, 255, 0.6);
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
-  transition: color 0.2s;
-}
-
-.rc-nav-links a:hover {
-  color: #ffffff;
-}
-
-.rc-nav-actions {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.rc-login-link {
-  color: rgba(255, 255, 255, 0.6);
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
-  transition: color 0.2s;
-}
-.rc-login-link:hover { color: #ffffff; }
-
-/* 覆盖 Ant Design 按钮样式 */
-.rc-download-btn-small.ant-btn-primary {
-  background: rgba(255, 99, 99, 0.15);
-  border: none;
-  color: #FF6363;
-  font-weight: 600;
-  font-size: 13px;
-  height: 32px;
-  padding: 0 16px;
-  border-radius: 8px;
-}
-.rc-download-btn-small.ant-btn-primary:hover {
-  background: rgba(255, 99, 99, 0.25);
-  color: #FF6363;
-}
-
-/* ================= 主体 Hero 区域 ================= */
-.rc-hero-section {
   position: relative;
   z-index: 1;
-  padding-top: 160px;
-  padding-bottom: 80px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
+/* ================= 
+   注意：原本的 .rc-header 样式块已全部删除 
+   因为我们现在使用 App.jsx 的全局导航栏 
+   ================= */
+
+/* ================= 主体 Hero 内容 ================= */
 .rc-hero-content {
   max-width: 800px;
-  margin: 0 auto 80px;
+  margin: 0 auto 60px; /* 稍微减小底部边距，因为没有下载按钮了 */
   display: flex;
   flex-direction: column;
   align-items: center;
+  text-align: center;
 }
 
 /* New Badge */
@@ -181,39 +112,27 @@
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.6);
   max-width: 640px;
-  margin: 0 auto 40px;
+  margin: 0 auto 0; /* 底部 margin 清零，因为没有 CTA 了 */
 }
 
-/* 主下载按钮 */
-.rc-primary-download-btn.ant-btn-primary {
-  height: 56px;
-  padding: 0 36px;
-  font-size: 17px;
-  font-weight: 600;
-  border-radius: 12px;
-  background: #ffffff;
-  color: #000000;
-  border: none;
-  display: inline-flex;
+/* 滚动提示动画 */
+.rc-scroll-hint {
+  margin-top: 60px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 8px;
+  opacity: 0.6;
+  cursor: pointer;
+  animation: bounce 2s infinite;
 }
-.rc-primary-download-btn.ant-btn-primary:hover {
-  background: #f2f2f2;
-  color: #000000;
-}
+.rc-scroll-text { font-size: 12px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; }
 
-.rc-version-text {
-  margin-top: 16px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.4);
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
+  40% {transform: translateY(-6px);}
+  60% {transform: translateY(-3px);}
 }
-.rc-version-text a {
-  color: rgba(255, 255, 255, 0.6);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.rc-version-text a:hover { color: #ffffff; }
 
 /* ================= 软件界面演示图 ================= */
 .rc-app-mockup-wrapper {
@@ -328,3 +247,115 @@
     padding: 1px 4px;
     margin-left: 4px;
 }
+
+/* ================= 第二屏：AI 终端 (保持不变) ================= */
+.rc-terminal-wrapper {
+  width: 100%;
+  max-width: 800px;
+  height: 70vh;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.rc-glass-terminal {
+  flex: 1;
+  background: rgba(22, 22, 22, 0.75);
+  backdrop-filter: blur(40px) saturate(150%);
+  -webkit-backdrop-filter: blur(40px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 
+    0 40px 80px -20px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.rc-terminal-header {
+  height: 44px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.02);
+}
+.rc-terminal-dots { display: flex; gap: 8px; }
+.rc-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.2); }
+.rc-dot.red { background: #FF5F57; }
+.rc-dot.yellow { background: #FEBC2E; }
+.rc-dot.green { background: #28C840; }
+
+.rc-chat-area {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rc-message-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.rc-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.rc-avatar.ai { background: linear-gradient(135deg, #FF6363 0%, #FF9E63 100%); }
+
+.rc-message-content {
+  flex: 1;
+}
+.rc-sender-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.4);
+  margin-bottom: 4px;
+}
+.rc-text-bubble {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.9);
+}
+
+.rc-input-area {
+  padding: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.rc-input-box {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}
+.rc-input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: white;
+  outline: none;
+}
+.rc-kbd {
+  background: rgba(255,255,255,0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+}
+
+/* 子页面不再自滚动：不在此处控制滚动条样式 */

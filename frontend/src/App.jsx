@@ -20,6 +20,7 @@ import {
     SortAscendingOutlined, FieldStringOutlined,
     BarChartOutlined, NodeIndexOutlined, ProfileOutlined, ArrowDownOutlined,
     FolderOutlined, SearchOutlined, ToolOutlined, RocketOutlined, FileTextOutlined, TableOutlined, ArrowLeftOutlined,
+    ArrowRightOutlined,
     LoadingOutlined, CheckOutlined, CloseOutlined
 } from '@ant-design/icons';
 import ReactFlow, {
@@ -720,6 +721,8 @@ function App() {
     const [generating, setGenerating] = useState(false);
     const [executing, setExecuting] = useState(false);
     const [result, setResult] = useState(null);
+    const [nodes, setNodes, onNodesChange] = useNodesState([]);
+    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const [savedWorkflows, setSavedWorkflows] = useState([]);
     const [showPreview, setShowPreview] = useState(false);
     const [previewData, setPreviewData] = useState(null);
@@ -759,6 +762,10 @@ function App() {
     const [teamSelectOptions, setTeamSelectOptions] = useState([]);
     const [teamSelectLoading, setTeamSelectLoading] = useState(false);
     const teamSelectCacheRef = useRef({ key: '', options: [] });
+    const [derivedColumnsByNodeId, setDerivedColumnsByNodeId] = useState({}); // {nodeId: string[]}
+    const derivedColumnsSigRef = useRef({}); // {nodeId: sig}
+    const derivedColumnsInFlightRef = useRef(new Set()); // Set<nodeId>
+    const derivedColumnsErrorSigRef = useRef({}); // {nodeId: sig} avoid toast spam
     const [fileSheets, setFileSheets] = useState({});
     const [configFileId, setConfigFileId] = useState(null); // 当前配置中选择的文件ID
     const [configSheet, setConfigSheet] = useState(null); // 当前配置中选择的Sheet
@@ -780,6 +787,28 @@ function App() {
 
     const [islandChatThreads, setIslandChatThreads] = useState([]); // [{local_id,title,session_id,messages,selected_tables,chat_status,created_at,updated_at}]
     const [activeIslandThreadId, setActiveIslandThreadId] = useState(null);
+
+    const buildBackendWorkflowConfig = useCallback((overrideNodeId, overrideConfig) => {
+        return {
+            nodes: nodes.map(n => ({
+                id: n.id,
+                type: n.data.type,
+                label: n.data.label,
+                config: (overrideNodeId && n.id === overrideNodeId && overrideConfig) ? overrideConfig : (n.data.config || {})
+            })),
+            edges: edges.map(e => ({ source: e.source, target: e.target }))
+        };
+    }, [nodes, edges]);
+
+    const buildBackendFileMapping = useCallback(() => {
+        const fileMapping = {};
+        nodes.forEach(n => {
+            if ((n.data.type === 'source' || n.data.type === 'source_csv') && n.data.config?.file_id) {
+                fileMapping[n.data.config.file_id] = n.data.config.file_id;
+            }
+        });
+        return fileMapping;
+    }, [nodes]);
 
     const ensureTeamSelectOptions = useCallback(async (fileId, sheetName) => {
         if (!fileId || !sheetName) {
@@ -808,6 +837,71 @@ function App() {
             setTeamSelectLoading(false);
         }
     }, []);
+
+    const ensureDerivedColumnsForNode = useCallback(async (nodeId) => {
+        if (!nodeId) return;
+        const id = String(nodeId);
+        const node = nodes.find(n => n.id === id);
+        if (!node) return;
+        const nodeType = node?.data?.type;
+        // source 节点的列元数据来自上传解析，不需要预览推导
+        if (nodeType === 'source' || nodeType === 'source_csv') return;
+        // AI 节点预览被后端禁止；避免自动触发
+        if (nodeType === 'ai_agent') return;
+
+        const shouldOverride = showNodeConfig && selectedNode?.id === id;
+        const overrideConfig = (() => {
+            if (!shouldOverride) return null;
+            const values = nodeForm.getFieldsValue();
+            const { _label, ...cfg } = values || {};
+            return cfg;
+        })();
+
+        const incomingSources = edges
+            .filter(e => e?.target === id)
+            .map(e => String(e.source))
+            .sort()
+            .join(',');
+
+        const sig = `${nodeType}::${incomingSources}::${JSON.stringify(overrideConfig || node.data.config || {})}`;
+        if (derivedColumnsByNodeId?.[id] && derivedColumnsSigRef.current?.[id] === sig) return;
+        if (derivedColumnsInFlightRef.current.has(id)) return;
+
+        derivedColumnsInFlightRef.current.add(id);
+        try {
+            const workflowConfig = buildBackendWorkflowConfig(shouldOverride ? id : null, shouldOverride ? overrideConfig : null);
+            const fileMapping = buildBackendFileMapping();
+            const resp = await workflowApi.previewNode(workflowConfig, fileMapping, id, 600, 1);
+            const cols = resp?.preview?.columns;
+            if (resp?.success && Array.isArray(cols)) {
+                derivedColumnsSigRef.current = { ...(derivedColumnsSigRef.current || {}), [id]: sig };
+                setDerivedColumnsByNodeId(prev => ({ ...(prev || {}), [id]: cols }));
+            } else {
+                const lastErrSig = derivedColumnsErrorSigRef.current?.[id];
+                if (lastErrSig !== sig) {
+                    derivedColumnsErrorSigRef.current = { ...(derivedColumnsErrorSigRef.current || {}), [id]: sig };
+                    message.warning('无法获取“处理结果”的列信息，请先确保上游数据源已配置，然后点击该节点的“预览(样本)”。');
+                }
+            }
+        } catch (e) {
+            const lastErrSig = derivedColumnsErrorSigRef.current?.[id];
+            if (lastErrSig !== sig) {
+                derivedColumnsErrorSigRef.current = { ...(derivedColumnsErrorSigRef.current || {}), [id]: sig };
+                message.warning('无法获取“处理结果”的列信息，请先确保上游数据源已配置，然后点击该节点的“预览(样本)”。');
+            }
+        } finally {
+            derivedColumnsInFlightRef.current.delete(id);
+        }
+    }, [nodes, edges, showNodeConfig, selectedNode, nodeForm, buildBackendWorkflowConfig, buildBackendFileMapping, derivedColumnsByNodeId]);
+
+    // 当配置面板打开时，若选择了“处理结果”作为输入源，自动推导其输出列用于下拉框展示
+    useEffect(() => {
+        if (!showNodeConfig || !selectedNode) return;
+        const fields = ['input_source', 'left_source', 'right_source', 'main_source', 'lookup_source', 'detail_source', 'summary_source'];
+        const ids = fields.map(f => nodeForm.getFieldValue(f)).filter(Boolean);
+        ids.forEach(id => ensureDerivedColumnsForNode(id));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showNodeConfig, selectedNode?.id]);
 
     const chatAbortControllerRef = useRef(null);
 
@@ -943,17 +1037,76 @@ function App() {
     const [nodeResults, setNodeResults] = useState({}); // {nodeId: {columns, data, total_rows}}
     const [showNodeResultModal, setShowNodeResultModal] = useState(false);
     const [viewingNodeResult, setViewingNodeResult] = useState(null); // {nodeId, columns, data}
+    const [nodePreviewLoading, setNodePreviewLoading] = useState(false);
+    const [showNodePreviewModal, setShowNodePreviewModal] = useState(false);
+    const [viewingNodePreview, setViewingNodePreview] = useState(null); // {nodeId, nodeName, columns, data, totalRows, stats}
     const [showNodeErrorDrawer, setShowNodeErrorDrawer] = useState(false);
     const [viewingNodeErrorId, setViewingNodeErrorId] = useState(null);
     const [lastExecutionLogs, setLastExecutionLogs] = useState([]);
     const [aiErrorSuggestLoading, setAiErrorSuggestLoading] = useState(false);
     const [aiErrorSuggestText, setAiErrorSuggestText] = useState('');
+    const lastAutoOpenedErrorRef = useRef({ key: '', nodeId: '' });
+
+    const summarizeErrorZh = useCallback((errorText, tracebackText = '') => {
+        const raw = String(errorText || '');
+        const tb = String(tracebackText || '');
+        const text = `${raw}\n${tb}`.trim();
+        if (!text) return '';
+
+        // pandas query 相关
+        if (/UndefinedVariableError|not defined/i.test(text)) {
+            return "筛选条件里有未定义的值/变量：字符串要加引号（例如 `办公室团队 == '邯郸刘洋'`），列名建议用反引号包裹（例如 `` `办公室团队` ``）。";
+        }
+        if (/SyntaxError|invalid syntax|EOF while parsing/i.test(text)) {
+            return "筛选条件语法错误：请使用 pandas query 语法，例如 `办公室团队 == '邯郸刘洋' and 门店id > 0`。";
+        }
+
+        // 缺列/列名不匹配
+        const keyError = text.match(/KeyError:\s*['\"]?([^'\"\n]+)['\"]?/i);
+        if (keyError?.[1]) {
+            return `找不到列：${keyError[1]}。请检查：1) 是否选对 Sheet；2) 列名是否有空格/全角；3) 是否在“列重命名”里改过列名；4) 上游是否真的输出了该列。`;
+        }
+        if (/not in index|not found in axis|not in columns|找不到关联列|找不到金额列/i.test(text)) {
+            return "找不到列或列名不一致：请检查两张表的列名是否完全一致（含空格/大小写/全角），必要时先用“列重命名”统一列名。";
+        }
+
+        // Sheet/文件相关
+        const sheetNotFound = text.match(/Worksheet named ['\"]([^'\"]+)['\"] not found/i);
+        if (sheetNotFound?.[1]) {
+            return `找不到工作表（Sheet）：${sheetNotFound[1]}。请回到“Excel读取”节点确认 Sheet 名称选择正确。`;
+        }
+        if (/找不到文件|FileNotFoundError/i.test(text)) {
+            return "找不到文件：请确认已上传文件，并在“Excel读取/CSV读取”节点选择了正确的文件。";
+        }
+
+        // 节点输入不足
+        if (/需要两个输入|至少两个输入|needs two inputs/i.test(text)) {
+            return "该节点需要两个上游输入：请确认有两条连线接入，并在“数据来源”里选择了对应输入。";
+        }
+
+        // 对账类常见
+        if (/对账核算|reconcile/i.test(text) && /关联键|join_keys|detail_keys|summary_keys/i.test(text)) {
+            return "对账核算关联键配置有问题：同名模式请用 join_keys；左右列名不同请开启“左右键不同名”，并保证两边键列数/顺序一致。";
+        }
+
+        return '';
+    }, []);
+
+    const openErrorDrawerForNode = useCallback((nodeId, cacheKey = '') => {
+        if (!nodeId) return;
+        const key = String(cacheKey || '');
+        const last = lastAutoOpenedErrorRef.current || {};
+        if (last.key === key && last.nodeId === nodeId) return;
+        lastAutoOpenedErrorRef.current = { key, nodeId };
+        setAiErrorSuggestText('');
+        setViewingNodeErrorId(nodeId);
+        setShowNodeErrorDrawer(true);
+    }, []);
 
     const reactFlowWrapper = useRef(null);
     const [reactFlowInstance, setReactFlowInstance] = useState(null);
     const [showNodeLibrary, setShowNodeLibrary] = useState(false); // 控制组件库 Modal
-    const [nodes, setNodes, onNodesChange] = useNodesState([]);
-    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
 
     // 辅助函数：当从组件库拖拽节点时，存储节点信息（React Flow 识别的关键）
     const onDragStartHandler = useCallback((event, nodeType, nodeConfig) => {
@@ -1286,7 +1439,11 @@ function App() {
         try {
             nodeFormProgrammaticSetRef.current = true;
             nodeForm.resetFields();
-            nodeForm.setFieldsValue({ ...config, _label: node.data.label });
+            const type = node?.data?.type;
+            const renamePairs = (type === 'transform' && config?.rename_map && typeof config.rename_map === 'object' && !Array.isArray(config.rename_map))
+                ? Object.entries(config.rename_map).map(([from, to]) => ({ from, to }))
+                : undefined;
+            nodeForm.setFieldsValue({ ...config, ...(renamePairs ? { rename_pairs: renamePairs } : {}), _label: node.data.label });
         } finally {
             nodeFormProgrammaticSetRef.current = false;
         }
@@ -1361,10 +1518,37 @@ function App() {
         if (!showNodeConfig) return;
         const nodeId = selectedNode?.id;
         if (!nodeId) return;
+        const nodeType = selectedNode?.data?.type;
+
+        let nextAllValues = allValues;
+        if (nodeType === 'transform') {
+            const pairs = Array.isArray(allValues?.rename_pairs) ? allValues.rename_pairs : [];
+            const renameMap = {};
+            for (const item of pairs) {
+                const from = String(item?.from ?? '').trim();
+                const to = String(item?.to ?? '').trim();
+                if (!from || !to) continue;
+                if (from === to) continue;
+                renameMap[from] = to;
+            }
+
+            nextAllValues = { ...(allValues || {}), rename_map: renameMap };
+
+            const currentMap = allValues?.rename_map && typeof allValues.rename_map === 'object' ? allValues.rename_map : {};
+            const same = JSON.stringify(currentMap) === JSON.stringify(renameMap);
+            if (!same) {
+                try {
+                    nodeFormProgrammaticSetRef.current = true;
+                    nodeForm.setFieldValue('rename_map', renameMap);
+                } finally {
+                    nodeFormProgrammaticSetRef.current = false;
+                }
+            }
+        }
 
         if (nodeFormAutoSaveTimerRef.current) clearTimeout(nodeFormAutoSaveTimerRef.current);
         nodeFormAutoSaveTimerRef.current = setTimeout(() => {
-            applyNodeConfigSilentlyForNode(nodeId, allValues);
+            applyNodeConfigSilentlyForNode(nodeId, nextAllValues);
         }, 350);
     };
 
@@ -1502,6 +1686,7 @@ function App() {
     const handleExecute = async () => {
         if (nodes.length === 0) return;
         setExecuting(true);
+        const runKey = `execute:${Date.now()}`;
 
         // 重置执行状态
         setNodeExecutionStatus({});
@@ -1562,6 +1747,12 @@ function App() {
                     }
                     return e;
                 }));
+
+                const errorNodeId = Object.entries(payload.node_status || {}).find(([, s]) => s === 'error')?.[0];
+                if (errorNodeId) {
+                    // 异步打开，避免与 setState 同步批处理冲突导致内容为空
+                    setTimeout(() => openErrorDrawerForNode(errorNodeId, runKey), 0);
+                }
             };
 
             const config = {
@@ -1622,6 +1813,8 @@ function App() {
                 }));
 
                 message.error('执行失败: ' + (detail.error || '未知错误'));
+                const errorNodeId = Object.entries(detail.node_status || {}).find(([, s]) => s === 'error')?.[0];
+                if (errorNodeId) setTimeout(() => openErrorDrawerForNode(errorNodeId, runKey), 0);
             } else {
                 message.error('执行出错: ' + (e?.response?.data?.detail || e.message || '未知错误'));
             }
@@ -1629,6 +1822,66 @@ function App() {
             setExecuting(false);
         }
     };
+
+    const handlePreviewNode = useCallback(async (nodeId) => {
+        if (!nodeId) return;
+        setNodePreviewLoading(true);
+        const runKey = `preview:${nodeId}:${Date.now()}`;
+        try {
+            const shouldOverrideConfig = showNodeConfig && selectedNode?.id === nodeId;
+            const overrideConfig = (() => {
+                if (!shouldOverrideConfig) return null;
+                const values = nodeForm.getFieldsValue();
+                const { _label, ...cfg } = values || {};
+                return cfg;
+            })();
+
+            const workflowConfig = {
+                nodes: nodes.map(n => ({
+                    id: n.id,
+                    type: n.data.type,
+                    label: n.data.label,
+                    config: (n.id === nodeId && overrideConfig) ? overrideConfig : (n.data.config || {})
+                })),
+                edges: edges.map(e => ({ source: e.source, target: e.target }))
+            };
+
+            const fileMapping = {};
+            nodes.forEach(n => {
+                if ((n.data.type === 'source' || n.data.type === 'source_csv') && n.data.config?.file_id) {
+                    fileMapping[n.data.config.file_id] = n.data.config.file_id;
+                }
+            });
+
+            const resp = await workflowApi.previewNode(workflowConfig, fileMapping, nodeId, 600, 50);
+            if (resp?.success) {
+                setViewingNodePreview({
+                    nodeId,
+                    nodeName: nodes.find(n => n.id === nodeId)?.data?.label || nodeId,
+                    columns: resp.preview?.columns || [],
+                    data: resp.preview?.data || [],
+                    totalRows: resp.preview?.total_rows || 0,
+                    stats: resp.stats || {}
+                });
+                setShowNodePreviewModal(true);
+            } else {
+                message.error('预览失败: ' + (resp?.error || '未知错误'));
+                const errorNodeId = Object.entries(resp?.node_status || {}).find(([, s]) => s === 'error')?.[0];
+                if (errorNodeId) setTimeout(() => openErrorDrawerForNode(errorNodeId, runKey), 0);
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail;
+            if (detail && typeof detail === 'object') {
+                message.error('预览失败: ' + (detail.error || '未知错误'));
+                const errorNodeId = Object.entries(detail.node_status || {}).find(([, s]) => s === 'error')?.[0];
+                if (errorNodeId) setTimeout(() => openErrorDrawerForNode(errorNodeId, runKey), 0);
+            } else {
+                message.error('预览出错: ' + (e?.response?.data?.detail || e.message || '未知错误'));
+            }
+        } finally {
+            setNodePreviewLoading(false);
+        }
+    }, [nodes, edges, showNodeConfig, selectedNode, nodeForm, openErrorDrawerForNode]);
 
     const buildWorkflowConfigForSave = useCallback(() => {
         const sanitizeNodeData = (data) => {
@@ -2462,6 +2715,9 @@ function App() {
                                     nodeInfo.sheet = sheetName;
                                     nodeInfo.columns = sheet?.columns || [];
                                 }
+                            } else {
+                                // 处理节点：尝试使用预览推导得到的列信息
+                                nodeInfo.columns = derivedColumnsByNodeId?.[sourceNode.id] || [];
                             }
 
                             result.push(nodeInfo);
@@ -2664,6 +2920,19 @@ function App() {
                 return (
                     <>
                         {inputInfo}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                            <Tooltip title={upstreamInfo.length > 0 ? '预览：仅执行到该节点（上游最多600行），返回50行抽样' : '请先连接上游数据源'}>
+                                <Button
+                                    icon={<EyeOutlined />}
+                                    onClick={() => handlePreviewNode(selectedNode.id)}
+                                    loading={nodePreviewLoading}
+                                    disabled={upstreamInfo.length === 0}
+                                >
+                                    预览(样本)
+                                </Button>
+                            </Tooltip>
+                            <Text type="secondary" style={{ fontSize: 12 }}>上游取600行，展示50行</Text>
+                        </div>
 
                         {/* 输入来源选择 - iOS风格 */}
                         {allUpstreamNodes.length > 0 && (
@@ -2685,6 +2954,28 @@ function App() {
                         <Form.Item label="删除列" name="drop_columns">
                             <Select mode="multiple" placeholder="选择要删除的列" options={transformCols} />
                         </Form.Item>
+
+                        <Divider orientation="left">列重命名</Divider>
+                        <Form.List name="rename_pairs">
+                            {(fields, { add, remove }) => (
+                                <>
+                                    {fields.map(({ key, name, ...restField }) => (
+                                        <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                                            <Form.Item {...restField} name={[name, 'from']} noStyle>
+                                                <Select placeholder="原列名" style={{ width: 140 }} options={transformCols} showSearch allowClear />
+                                            </Form.Item>
+                                            <ArrowRightOutlined style={{ color: '#999' }} />
+                                            <Form.Item {...restField} name={[name, 'to']} noStyle>
+                                                <Input placeholder="新列名" style={{ width: 160 }} />
+                                            </Form.Item>
+                                            <DeleteOutlined onClick={() => remove(name)} style={{ color: '#ff4d4f' }} />
+                                        </Space>
+                                    ))}
+                                    <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>添加重命名</Button>
+                                    <div style={{ marginTop: 6, fontSize: 12, color: '#888' }}>留空则不重命名；重命名在筛选/计算之后、输出之前执行。</div>
+                                </>
+                            )}
+                        </Form.List>
 
                         <Divider orientation="left">计算列</Divider>
                         <Form.List name="calculations">
@@ -3070,6 +3361,7 @@ function App() {
                 // 动态获取列（基于选中的输入源或连线）
                 const reconcileDetailSourceId = nodeForm.getFieldValue('detail_source');
                 const reconcileSummarySourceId = nodeForm.getFieldValue('summary_source');
+                const reconcileUseKeyMapping = Boolean(nodeForm.getFieldValue('use_key_mapping'));
                 const reconcileDetailCols = reconcileDetailSourceId
                     ? getColumnsForSource(reconcileDetailSourceId)
                     : (upstreamInfo.length > 0 && upstreamInfo[0].columns ? upstreamInfo[0].columns.map(c => ({ label: c, value: c })) : []);
@@ -3084,6 +3376,19 @@ function App() {
                 return (
                     <>
                         {inputInfo}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                            <Tooltip title={upstreamInfo.length >= 2 ? '预览：仅执行到该节点（上游最多600行），返回差异统计+50行抽样' : '对账核算需要两个输入：请先连接两张表'}>
+                                <Button
+                                    icon={<EyeOutlined />}
+                                    onClick={() => handlePreviewNode(selectedNode.id)}
+                                    loading={nodePreviewLoading}
+                                    disabled={upstreamInfo.length < 2}
+                                >
+                                    预览(样本)
+                                </Button>
+                            </Tooltip>
+                            <Text type="secondary" style={{ fontSize: 12 }}>上游取600行，展示50行</Text>
+                        </div>
                         <div style={{ marginBottom: 16, padding: 10, background: '#fff3cd', borderRadius: 8, fontSize: 12 }}>
                             📊 对账核算：自动汇总明细表的金额，与汇总表对比，输出差异记录
                         </div>
@@ -3098,9 +3403,30 @@ function App() {
                         )}
 
                         <Divider orientation="left">关联与维度</Divider>
-                        <Form.Item label="关联键（支持多列）" name="join_keys" tooltip="按此键分组汇总对比，如：市场id+门店id">
-                            <Select mode="multiple" placeholder="选择关联维度" options={reconcileCommonCols.length > 0 ? reconcileCommonCols : reconcileDetailCols} />
+                        <Form.Item
+                            label="左右键不同名"
+                            name="use_key_mapping"
+                            valuePropName="checked"
+                            tooltip="开启后可分别选择明细表/汇总表的关联键（用于列名不一致的情况，如：商城子订单 vs 子订单号）"
+                        >
+                            <Switch />
                         </Form.Item>
+                        {!reconcileUseKeyMapping && (
+                            <Form.Item label="关联键（支持多列）" name="join_keys" tooltip="按此键分组汇总对比（两边列名必须一致），如：市场id+门店id">
+                                <Select mode="multiple" placeholder="选择关联维度" options={reconcileCommonCols.length > 0 ? reconcileCommonCols : reconcileDetailCols} />
+                            </Form.Item>
+                        )}
+                        {reconcileUseKeyMapping && (
+                            <>
+                                <Form.Item label="明细表关联键（支持多列）" name="detail_keys" tooltip="明细表用于分组汇总的键列">
+                                    <Select mode="multiple" placeholder="选择明细表关联键" options={reconcileDetailCols} />
+                                </Form.Item>
+                                <Form.Item label="汇总表关联键（支持多列）" name="summary_keys" tooltip="汇总表用于分组汇总的键列（列数需与明细一致）">
+                                    <Select mode="multiple" placeholder="选择汇总表关联键" options={reconcileSummaryCols} />
+                                </Form.Item>
+                                <div style={{ marginTop: -8, marginBottom: 8, fontSize: 12, color: '#888' }}>提示：两边关联键的列数和顺序需一致（例如：明细[商城子订单] → 汇总[子订单号]）。</div>
+                            </>
+                        )}
                         <Divider orientation="left">金额列配置</Divider>
                         <Form.Item label="明细表金额列" name="left_column" rules={[{ required: true }]}>
                             <Select placeholder="选择明细表金额列" options={reconcileDetailCols} showSearch />
@@ -3457,6 +3783,25 @@ function App() {
                             </div>
 
                             <div>
+                                {(() => {
+                                    const zh = summarizeErrorZh(err, tracebackText);
+                                    if (!zh) return null;
+                                    return (
+                                        <div style={{
+                                            marginBottom: 10,
+                                            padding: '10px 12px',
+                                            borderRadius: 14,
+                                            background: 'rgba(52,199,89,0.10)',
+                                            border: '1px solid rgba(52,199,89,0.25)',
+                                            color: 'rgba(29,29,31,0.88)',
+                                            fontSize: 13,
+                                            lineHeight: 1.45
+                                        }}>
+                                            <div style={{ fontWeight: 800, marginBottom: 6 }}>一眼看懂（中文解释）</div>
+                                            <div>{zh}</div>
+                                        </div>
+                                    );
+                                })()}
                                 <div style={{ fontSize: 13, color: 'rgba(29,29,31,0.65)', fontWeight: 700, marginBottom: 8 }}>错误原因</div>
                                 <pre style={{
                                     margin: 0,
@@ -3635,6 +3980,73 @@ function App() {
                         pagination={false}
                         sticky
                     />
+                )}
+            </Modal>
+
+            {/* 节点预览（样本执行）Modal */}
+            <Modal
+                open={showNodePreviewModal}
+                onCancel={() => setShowNodePreviewModal(false)}
+                footer={null}
+                width={1200}
+                title={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 24, height: 24, background: '#007AFF', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <EyeOutlined style={{ color: 'white', fontSize: 12 }} />
+                        </div>
+                        <span>节点预览(样本): {viewingNodePreview?.nodeName}</span>
+                        <Tag color="blue">上游样本 {viewingNodePreview?.stats?.source_rows ?? 600} 行</Tag>
+                        <Tag color="blue">展示 {viewingNodePreview?.stats?.display_rows ?? 50} 行</Tag>
+                        <Tag>{viewingNodePreview?.totalRows || 0} 行(节点输出)</Tag>
+                    </div>
+                }
+                centered
+                styles={{ body: { padding: 0 } }}
+            >
+                {viewingNodePreview && (
+                    <>
+                        <div style={{ padding: '10px 16px', background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
+                            <Space size={[8, 8]} wrap>
+                                {typeof viewingNodePreview?.stats?.diff_count === 'number' && (
+                                    <Tag color="red">差异 {viewingNodePreview.stats.diff_count}</Tag>
+                                )}
+                                {typeof viewingNodePreview?.stats?.match_count === 'number' && (
+                                    <Tag color="green">一致 {viewingNodePreview.stats.match_count}</Tag>
+                                )}
+                                {typeof viewingNodePreview?.stats?.max_abs_diff === 'number' && (
+                                    <Tag color="volcano">最大差异 {Number(viewingNodePreview.stats.max_abs_diff).toFixed(2)}</Tag>
+                                )}
+                                {typeof viewingNodePreview?.stats?.sum_abs_diff === 'number' && (
+                                    <Tag color="orange">差异总量 {Number(viewingNodePreview.stats.sum_abs_diff).toFixed(2)}</Tag>
+                                )}
+                            </Space>
+                            {viewingNodePreview?.stats?.note && (
+                                <div style={{ marginTop: 6, fontSize: 12, color: '#888' }}>{viewingNodePreview.stats.note}</div>
+                            )}
+                        </div>
+                        <Table
+                            dataSource={viewingNodePreview.data?.map((row, idx) => ({ key: idx, ...row })) || []}
+                            columns={viewingNodePreview.columns?.map(col => ({
+                                title: col,
+                                dataIndex: col,
+                                key: col,
+                                width: 150,
+                                ellipsis: true,
+                                render: (text) => (
+                                    <Tooltip title={text} placement="topLeft">
+                                        <span style={{ display: 'block', maxWidth: '100%', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                            {text}
+                                        </span>
+                                    </Tooltip>
+                                )
+                            })) || []}
+                            scroll={{ x: 'max-content', y: 500 }}
+                            size="small"
+                            bordered
+                            pagination={false}
+                            sticky
+                        />
+                    </>
                 )}
             </Modal>
 

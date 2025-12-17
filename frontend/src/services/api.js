@@ -155,6 +155,18 @@ export const workflowApi = {
         return response.data;
     },
 
+    // 预览指定节点（样本执行）
+    previewNode: async (workflowConfig, fileMapping, nodeId, sourceRows = 600, displayRows = 50) => {
+        const response = await api.post('/workflow/preview-node', {
+            workflow_config: workflowConfig,
+            file_mapping: fileMapping,
+            node_id: nodeId,
+            source_rows: sourceRows,
+            display_rows: displayRows
+        });
+        return response.data;
+    },
+
     // 获取历史记录
     getHistory: async (limit = 50) => {
         const response = await api.get('/workflow/history/list', { params: { limit } });
