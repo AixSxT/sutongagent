@@ -367,6 +367,9 @@ class WorkflowEngine:
             
         elif node_type == 'source_csv':
             return self._execute_source_csv(config, file_mapping)
+
+        elif node_type == 'source_optional':
+            return self._execute_source_optional(config, file_mapping)
         
         # ========== 数据清洗 ==========
         elif node_type == 'transform':
@@ -430,6 +433,27 @@ class WorkflowEngine:
             if len(input_dfs) < 2:
                 raise ValueError("对账核算需要两个输入：明细表和汇总表")
             return self._execute_reconcile(input_dfs[0], input_dfs[1], config)
+
+        # ========== 利润表（业务模块） ==========
+        elif node_type == 'profit_income':
+            if not input_dfs: return None
+            return self._execute_profit_income(input_dfs[0], config)
+
+        elif node_type == 'profit_cost':
+            if not input_dfs: return None
+            return self._execute_profit_cost(input_dfs[0], config)
+
+        elif node_type == 'profit_expense':
+            if not input_dfs: return None
+            return self._execute_profit_expense(input_dfs[0], config)
+
+        elif node_type == 'profit_summary':
+            # 汇总节点支持通过 config 指定上游节点ID；也支持仅按连线输入顺序（input_dfs）推断
+            return self._execute_profit_summary(input_dfs, config, context)
+
+        elif node_type == 'profit_table':
+            # 利润表节点：从单个工作簿读取多Sheet并汇总输出（不依赖 input_dfs）
+            return self._execute_profit_table(config, file_mapping)
         
         # ========== AI/自动化 ==========
         elif node_type == 'code':
@@ -460,6 +484,10 @@ class WorkflowEngine:
             return self._execute_source_limited(config, file_mapping, source_rows)
         if node_type == 'source_csv':
             return self._execute_source_csv_limited(config, file_mapping, source_rows)
+        if node_type == 'source_optional':
+            return self._execute_source_optional_limited(config, file_mapping, source_rows)
+        if node_type == 'profit_table':
+            return self._execute_profit_table(config, file_mapping, nrows=source_rows)
 
         # 预览不支持 AI 节点（可能很慢/有副作用）
         if node_type == 'ai_agent':
@@ -507,6 +535,15 @@ class WorkflowEngine:
 
         raise FileNotFoundError(f"找不到文件: {file_id}")
 
+    def _execute_source_optional_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
+        file_id = config.get('file_id')
+        if not file_id:
+            return pd.DataFrame()
+        cfg = dict(config or {})
+        if not cfg.get('sheet_name') and cfg.get('sheet_name') != 0:
+            cfg['sheet_name'] = 0
+        return self._execute_source_limited(cfg, file_mapping, nrows)
+
     # ========== 数据源实现 ==========
     def _execute_source(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
@@ -528,6 +565,15 @@ class WorkflowEngine:
                 return df
                 
         raise FileNotFoundError(f"找不到文件: {file_id}")
+
+    def _execute_source_optional(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
+        file_id = config.get('file_id')
+        if not file_id:
+            return pd.DataFrame()
+        cfg = dict(config or {})
+        if not cfg.get('sheet_name') and cfg.get('sheet_name') != 0:
+            cfg['sheet_name'] = 0
+        return self._execute_source(cfg, file_mapping)
 
     def _execute_source_csv(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
@@ -1090,6 +1136,760 @@ class WorkflowEngine:
         logger.info(f"[Reconcile] 完成: 明细{len(detail_df)}行 vs 汇总{len(summary_df)}行, 发现差异{diff_count}条")
         
         return result
+
+    # ========== 利润表（业务模块）实现 ==========
+    def _execute_profit_table(self, config: Dict, file_mapping: Dict, nrows: Optional[int] = None) -> pd.DataFrame:
+        """
+        利润表（模板列）汇总：从单个工作簿读取多张来源Sheet，能计算的列尽量填充，其它列留空。
+
+        设计目标：用户只需要选择一个 Excel 文件（如“邯郸市场-2025年10月利润表 - 刘洋.xlsx”），
+        系统从其中的来源Sheet（订单明细/直播间/退货/资金日报/分摊费用/工资表/财务系统/富友流水/房租/市场定额…）
+        汇总得到一张“部分利润表”。
+
+        nrows 仅用于预览模式：限制读取行数，避免全量读取导致卡顿。
+        """
+        cfg = config or {}
+        file_id = cfg.get('file_id')
+        if not file_id:
+            raise ValueError("利润表节点缺少配置：file_id（请选择Excel文件）")
+
+        mapped_id = file_mapping.get(file_id, file_id)
+        file_path = None
+        for f in os.listdir(UPLOAD_DIR):
+            if f.startswith(mapped_id):
+                file_path = os.path.join(UPLOAD_DIR, f)
+                break
+        if not file_path:
+            raise FileNotFoundError(f"找不到文件: {file_id}")
+
+        def _read_sheet(sheet_name: str, limit: Optional[int] = None) -> pd.DataFrame:
+            try:
+                return pd.read_excel(file_path, sheet_name=sheet_name, nrows=int(limit) if limit else None)
+            except Exception:
+                return pd.DataFrame()
+
+        # 来源Sheet（缺失则为空表）
+        orders = _read_sheet('订单明细', nrows)
+        live = _read_sheet('直播间', nrows)
+        returns = _read_sheet('退货', nrows)
+        funds = _read_sheet('资金日报', nrows)
+        alloc = _read_sheet('分摊费用', nrows)
+        payroll = _read_sheet('工资表', nrows)
+        finance = _read_sheet('财务系统', nrows)
+        fuiou = _read_sheet('富友流水', nrows)
+        rent_liu = _read_sheet('刘洋房租', nrows)
+        rent_hu = _read_sheet('胡兴旺房租', nrows)
+        quota = _read_sheet('市场定额', nrows)
+
+        # 输出列（对齐模板：docx/2025年转加盟利润表模板.xlsx → “利润表表头统一格式（2025.8启用）” 第4行）
+        columns = [
+            '年份', '月份', '市场', '办公室', '店长姓名', 'erp门店编号', '门店名称（自定义）', '开店时间', '关店时间', 'erp门店名称', '是否店中店',
+            '所属实体店门店名称', '人数',
+            '一、收入', '计业绩产品收入', '不计业绩产品收入', '产品退货', '计业绩团品收入', '不计业绩团品收入', '旅游收入（非赠）', '其他收入',
+            '二、成本', '计业绩产品成本', '计业绩产品赠品（主品）', '不计业绩产品成本', '成本优惠', '退货成本', '计业绩团品成本', '不计业绩团品成本',
+            '旅游成本（非赠）', '其他成本',
+            '三、费用', '一线工资', '高管工资', '二线工资（人事司机）', '一线社保', '高管社保', '二线社保（人事司机）',
+            '主品赠送（非主品）', '小单礼品', '绑定上人礼品', '分享会礼品', '维护客户礼品',
+            '业务办公费', '旅游', '任务款', '红包', '门店押金', '门店转让费、中介费', '门店房租', '门店装修', '门店资产', '门店暖气费',
+            '门店物业费', '门店水、电、液化气', '公司服务费', '代账费', '运费',
+            '利息收支、手续费（转账）', '直播间APP手续费（0.6%）', '辅酶手续费（千分之6）', '富友手续费（千分之2.2）',
+            '门店税费', '企微年费分摊', '直播流量费分摊', '仓储运费分摊', '其他分摊', '其他费用',
+            '四、利润',
+            '一代管道', '二代管道', '三代管道', '四代管道', '五代管道', '六代管道', '股东1', '股东2',
+            '一代经理级别', '一代提成比例', '一代提成金额',
+            '二代经理级别', '二代提成比例', '二代提成金额',
+            '三代经理级别', '三代提成比例', '三代提成金额',
+            '一级经理姓名', '一级经理提成比例', '一级经理提成金额',
+            '特殊一级经理姓名', '特殊一级经理提成比例', '特殊一级经理提成金额',
+            '特特殊一级经理姓名', '特特殊一级经理提成比例', '特特殊一级经理提成金额',
+            '股东1姓名', '股东1提成比例', '股东1提成金额', '股东2姓名', '股东2提成比例', '股东2提成金额', '品牌、软件公司'
+        ]
+
+        def _normalize_store_name(val: Any) -> str:
+            s = '' if val is None else str(val)
+            s = s.strip()
+            if not s or s.lower() in {'nan', 'none'}:
+                return ''
+            s = re.sub(r'^（[^）]+）', '', s)  # 去掉前缀（市场）
+            s = re.sub(r'^\\([^)]*\\)', '', s)
+            return s.strip()
+
+        def _to_num(series: pd.Series) -> pd.Series:
+            return pd.to_numeric(series, errors='coerce').fillna(0)
+
+        def _infer_team_name() -> str:
+            for df, col in [(orders, '所属团队'), (live, '所属团队'), (returns, '团队'), (funds, '团队'), (finance, '市场团队')]:
+                if isinstance(df, pd.DataFrame) and (not df.empty) and col in df.columns:
+                    s = df[col].dropna().astype(str).str.strip()
+                    s = s[s.astype(bool)]
+                    if not s.empty:
+                        return s.value_counts().index[0]
+            return ''
+
+        def _infer_year_month() -> (Optional[int], Optional[int]):
+            for df, col in [(orders, '订单提交时间'), (live, '订单提交时间'), (funds, '日期'), (returns, '订单时间'), (returns, '申请时间')]:
+                if not isinstance(df, pd.DataFrame) or df.empty or col not in df.columns:
+                    continue
+                dt = pd.to_datetime(df[col], errors='coerce').dropna()
+                if dt.empty:
+                    continue
+                ym = dt.dt.to_period('M').astype(str).value_counts().index[0]  # e.g. '2025-10'
+                try:
+                    y, m = ym.split('-')
+                    return int(y), int(m)
+                except Exception:
+                    continue
+            return None, None
+
+        team_name = str(cfg.get('team_name') or '').strip() or _infer_team_name()
+        market_name = str(cfg.get('market_name') or '').strip()
+        office_name = str(cfg.get('office_name') or '').strip()
+        if not market_name and team_name:
+            market_name = team_name[:2]
+        if not office_name and team_name:
+            office_name = team_name[len(market_name):] if market_name and team_name.startswith(market_name) else team_name
+
+        year = cfg.get('year')
+        month = cfg.get('month')
+        try:
+            year = int(year) if year not in (None, '') else None
+        except Exception:
+            year = None
+        try:
+            month = int(month) if month not in (None, '') else None
+        except Exception:
+            month = None
+        if not year or not month:
+            y2, m2 = _infer_year_month()
+            year = year or y2
+            month = month or m2
+        if not year or not month:
+            raise ValueError("利润表节点无法推断年份/月份：请在配置中填写 year/month 或确保来源表含日期列")
+
+        ym_int = int(f"{year:04d}{month:02d}")
+
+        def _filter_ym(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty or date_col not in df.columns:
+                return pd.DataFrame()
+            dt = pd.to_datetime(df[date_col], errors='coerce')
+            out = df.copy()
+            out['_dt'] = dt
+            out = out.dropna(subset=['_dt'])
+            out = out[(out['_dt'].dt.year == year) & (out['_dt'].dt.month == month)].copy()
+            return out
+
+        # ========== 订单明细：收入/成本核心 ==========
+        orders_f = orders.copy() if isinstance(orders, pd.DataFrame) else pd.DataFrame()
+        if not orders_f.empty:
+            if team_name and '所属团队' in orders_f.columns:
+                orders_f = orders_f[orders_f['所属团队'].astype(str) == team_name].copy()
+            orders_f = _filter_ym(orders_f, '订单提交时间')
+            orders_f['_store'] = orders_f['所属门店'].map(_normalize_store_name) if '所属门店' in orders_f.columns else ''
+
+        # 门店编号映射（市场定额：店面 → 店面编号）
+        store_id_map: Dict[str, int] = {}
+        if isinstance(quota, pd.DataFrame) and (not quota.empty) and '店面' in quota.columns and '店面编号' in quota.columns:
+            q = quota.copy()
+            q['_store'] = q['店面'].map(_normalize_store_name)
+            q['_id'] = _to_num(q['店面编号'])
+            for _, r in q.dropna(subset=['_store']).iterrows():
+                st = str(r['_store'])
+                if st and st.lower() not in {'nan', 'none'} and r['_id']:
+                    store_id_map[st] = int(r['_id'])
+
+        # 门店列表（以订单为主）
+        stores: List[str] = []
+        if not orders_f.empty and '_store' in orders_f.columns:
+            stores = sorted([s for s in orders_f['_store'].astype(str).unique().tolist() if s and s.lower() not in {'nan', 'none'}])
+
+        # fallback：订单为空时从工资表推门店
+        if not stores and isinstance(payroll, pd.DataFrame) and (not payroll.empty) and '门店名称' in payroll.columns:
+            stores = sorted([_normalize_store_name(s) for s in payroll['门店名称'].dropna().astype(str).unique().tolist() if _normalize_store_name(s)])
+
+        if not stores:
+            return pd.DataFrame(columns=columns)
+
+        # 订单收入口径：按“订单实际支付”
+        def _sum_orders(mask: pd.Series, amount_col: str) -> pd.Series:
+            if orders_f.empty or amount_col not in orders_f.columns:
+                return pd.Series(dtype=float)
+            m = mask.fillna(False)
+            if int(m.sum()) == 0:
+                return pd.Series(dtype=float)
+            s = _to_num(orders_f.loc[m, amount_col])
+            return s.groupby(orders_f.loc[m, '_store']).sum()
+
+        def _sum_orders_cost(mask: pd.Series) -> pd.Series:
+            if orders_f.empty or '成本合计' not in orders_f.columns:
+                return pd.Series(dtype=float)
+            m = mask.fillna(False)
+            if int(m.sum()) == 0:
+                return pd.Series(dtype=float)
+            s = _to_num(orders_f.loc[m, '成本合计'])
+            return s.groupby(orders_f.loc[m, '_store']).sum()
+
+        prod = orders_f['商品类型'].astype(str) if (not orders_f.empty and '商品类型' in orders_f.columns) else pd.Series([], dtype=str)
+        perf = orders_f['是否计入业绩'].astype(str) if (not orders_f.empty and '是否计入业绩' in orders_f.columns) else pd.Series([], dtype=str)
+        gift = orders_f['是否赠品'].astype(str) if (not orders_f.empty and '是否赠品' in orders_f.columns) else pd.Series([], dtype=str)
+
+        is_main = prod == '主品'
+        is_group = prod == '团品'
+        is_perf = perf == '计入业绩'
+        is_nonperf = perf == '不计入业绩'
+        is_nongift = gift == '非赠品'
+        is_gift = gift != '非赠品'
+
+        s_rev_main_perf = _sum_orders(is_main & is_perf, '订单实际支付')
+        s_rev_main_nonperf = _sum_orders(is_main & is_nonperf, '订单实际支付')
+        s_rev_group_perf = _sum_orders(is_group & is_perf, '订单实际支付')
+        s_rev_group_nonperf = _sum_orders(is_group & is_nonperf, '订单实际支付')
+
+        s_cost_main_perf = _sum_orders_cost(is_main & is_perf & is_nongift)
+        s_cost_main_gift = _sum_orders_cost(is_main & is_perf & is_gift)
+        s_cost_main_nonperf = _sum_orders_cost(is_main & is_nonperf & is_nongift)
+        s_cost_group_perf = _sum_orders_cost(is_group & is_perf)
+        s_cost_group_nonperf = _sum_orders_cost(is_group & is_nonperf)
+
+        # ========== 直播间：补充团品收入/成本 ==========
+        live_f = live.copy() if isinstance(live, pd.DataFrame) else pd.DataFrame()
+        if not live_f.empty:
+            if team_name and '所属团队' in live_f.columns:
+                live_f = live_f[live_f['所属团队'].astype(str) == team_name].copy()
+            live_f = _filter_ym(live_f, '订单提交时间')
+            live_f['_store'] = live_f['所属门店'].map(_normalize_store_name) if '所属门店' in live_f.columns else ''
+
+        def _sum_live(mask: pd.Series, amount_col: str) -> pd.Series:
+            if live_f.empty or amount_col not in live_f.columns:
+                return pd.Series(dtype=float)
+            m = mask.fillna(False)
+            if int(m.sum()) == 0:
+                return pd.Series(dtype=float)
+            s = _to_num(live_f.loc[m, amount_col])
+            return s.groupby(live_f.loc[m, '_store']).sum()
+
+        live_perf = live_f['是否计入业绩'].astype(str) if (not live_f.empty and '是否计入业绩' in live_f.columns) else pd.Series([], dtype=str)
+        s_live_rev_perf = _sum_live(live_perf == '计入业绩', '实际支付金额')
+        s_live_rev_nonperf = _sum_live(live_perf == '不计入业绩', '实际支付金额')
+        s_live_cost_perf = _sum_live(live_perf == '计入业绩', '成本合计')
+        s_live_cost_nonperf = _sum_live(live_perf == '不计入业绩', '成本合计')
+
+        s_rev_group_perf = s_rev_group_perf.add(s_live_rev_perf, fill_value=0)
+        s_rev_group_nonperf = s_rev_group_nonperf.add(s_live_rev_nonperf, fill_value=0)
+        s_cost_group_perf = s_cost_group_perf.add(s_live_cost_perf, fill_value=0)
+        s_cost_group_nonperf = s_cost_group_nonperf.add(s_live_cost_nonperf, fill_value=0)
+
+        # ========== 退货：退款金额/退货成本（负数） ==========
+        returns_f = returns.copy() if isinstance(returns, pd.DataFrame) else pd.DataFrame()
+        if not returns_f.empty:
+            if team_name and '团队' in returns_f.columns:
+                returns_f = returns_f[returns_f['团队'].astype(str) == team_name].copy()
+            date_col = '订单时间' if '订单时间' in returns_f.columns else ('申请时间' if '申请时间' in returns_f.columns else None)
+            if date_col:
+                returns_f = _filter_ym(returns_f, date_col)
+            returns_f['_store'] = returns_f['门店'].map(_normalize_store_name) if '门店' in returns_f.columns else ''
+
+        def _sum_returns(mask: pd.Series, amount_col: str) -> pd.Series:
+            if returns_f.empty or amount_col not in returns_f.columns:
+                return pd.Series(dtype=float)
+            m = mask.fillna(False)
+            if int(m.sum()) == 0:
+                return pd.Series(dtype=float)
+            s = _to_num(returns_f.loc[m, amount_col])
+            return s.groupby(returns_f.loc[m, '_store']).sum()
+
+        ret_kind = returns_f['是否团品'].astype(str) if (not returns_f.empty and '是否团品' in returns_f.columns) else pd.Series([], dtype=str)
+        s_ret_amt_main = _sum_returns(ret_kind == '主品', '总退货金额')
+        s_ret_cost_all = _sum_returns(pd.Series([True] * len(returns_f)), '成本合计') if (not returns_f.empty) else pd.Series(dtype=float)
+
+        # ========== 工资表：一线工资（税前工资） ==========
+        payroll_f = payroll.copy() if isinstance(payroll, pd.DataFrame) else pd.DataFrame()
+        if not payroll_f.empty:
+            team_col = '市场名称' if '市场名称' in payroll_f.columns else None
+            if team_col and (team_name or office_name):
+                key = team_name or office_name
+                payroll_f = payroll_f[payroll_f[team_col].astype(str).str.contains(key, na=False)].copy()
+            if '年月' in payroll_f.columns:
+                payroll_f = payroll_f[_to_num(payroll_f['年月']).astype(int) == ym_int].copy()
+            payroll_f['_store'] = payroll_f['门店名称'].map(_normalize_store_name) if '门店名称' in payroll_f.columns else ''
+
+        s_salary = _to_num(payroll_f['税前工资']).groupby(payroll_f['_store']).sum() if (not payroll_f.empty and '税前工资' in payroll_f.columns) else pd.Series(dtype=float)
+
+        # ========== 财务系统：任务款 ==========
+        finance_f = finance.copy() if isinstance(finance, pd.DataFrame) else pd.DataFrame()
+        if not finance_f.empty:
+            if team_name and '市场团队' in finance_f.columns:
+                finance_f = finance_f[finance_f['市场团队'].astype(str) == team_name].copy()
+            if '月份' in finance_f.columns:
+                finance_f = finance_f[_to_num(finance_f['月份']).astype(int) == ym_int].copy()
+            finance_f['_store'] = finance_f['门店名称'].map(_normalize_store_name) if '门店名称' in finance_f.columns else ''
+
+        s_task = _to_num(finance_f['任务款']).groupby(finance_f['_store']).sum() if (not finance_f.empty and '任务款' in finance_f.columns) else pd.Series(dtype=float)
+
+        # ========== 富友流水：手续费 ==========
+        fuiou_f = fuiou.copy() if isinstance(fuiou, pd.DataFrame) else pd.DataFrame()
+        if not fuiou_f.empty:
+            fuiou_f = _filter_ym(fuiou_f, '交易日期') if '交易日期' in fuiou_f.columns else fuiou_f
+            fuiou_f['_store'] = fuiou_f['门店名称'].map(_normalize_store_name) if '门店名称' in fuiou_f.columns else ''
+
+        s_fuiou_fee = _to_num(fuiou_f['订单手续费']).groupby(fuiou_f['_store']).sum() if (not fuiou_f.empty and '订单手续费' in fuiou_f.columns) else pd.Series(dtype=float)
+
+        # ========== 资金日报：社保/水电等科目（按“减少”列作为支出） ==========
+        funds_f = funds.copy() if isinstance(funds, pd.DataFrame) else pd.DataFrame()
+        if not funds_f.empty:
+            if team_name and '团队' in funds_f.columns:
+                funds_f = funds_f[funds_f['团队'].astype(str) == team_name].copy()
+            funds_f = _filter_ym(funds_f, '日期') if '日期' in funds_f.columns else funds_f
+            funds_f['_store'] = funds_f['店面名称'].map(_normalize_store_name) if '店面名称' in funds_f.columns else ''
+
+        amount_col = None
+        for c in ['减少', '（市场报销）', '增加']:
+            if not funds_f.empty and c in funds_f.columns:
+                amount_col = c
+                break
+        funds_pivot = pd.DataFrame()
+        if (not funds_f.empty) and amount_col and '科目' in funds_f.columns:
+            funds_f['_amt'] = _to_num(funds_f[amount_col])
+            funds_pivot = funds_f.pivot_table(index='_store', columns='科目', values='_amt', aggfunc='sum', fill_value=0)
+
+        # ========== 房租：按月份摊销（选择与当前门店列表交集更多的房租表） ==========
+        def _rent_series(df: pd.DataFrame) -> (pd.Series, Dict[str, str]):
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                return pd.Series(dtype=float), {}
+            store_col = '店面名称' if '店面名称' in df.columns else None
+            if not store_col:
+                return pd.Series(dtype=float), {}
+            d = df.copy()
+            d['_store'] = d[store_col].map(_normalize_store_name)
+            prefer_cols = [f'{month}月摊销', f'{month}月摊', '本月下费用']
+            val_col = next((c for c in prefer_cols if c in d.columns), None)
+            if not val_col:
+                return pd.Series(dtype=float), {}
+            s = _to_num(d[val_col]).groupby(d['_store']).sum()
+            manager_map: Dict[str, str] = {}
+            if '店长' in d.columns:
+                for _, r in d.dropna(subset=['_store']).iterrows():
+                    st = str(r['_store']).strip()
+                    if st and st not in manager_map:
+                        v = r.get('店长')
+                        if v not in (None, '', 'nan') and str(v).strip():
+                            manager_map[st] = str(v).strip()
+            return s, manager_map
+
+        rent_s_liu, manager_map_liu = _rent_series(rent_liu)
+        rent_s_hu, manager_map_hu = _rent_series(rent_hu)
+        inter_liu = len(set(rent_s_liu.index.astype(str)).intersection(set(stores))) if not rent_s_liu.empty else 0
+        inter_hu = len(set(rent_s_hu.index.astype(str)).intersection(set(stores))) if not rent_s_hu.empty else 0
+        rent_s = rent_s_liu if inter_liu >= inter_hu else rent_s_hu
+        manager_map = manager_map_liu if inter_liu >= inter_hu else manager_map_hu
+
+        # ========== 分摊费用：代账费/门店税费/企微分摊 ==========
+        alloc_f = alloc.copy() if isinstance(alloc, pd.DataFrame) else pd.DataFrame()
+        if not alloc_f.empty:
+            team_col = '团队.1' if '团队.1' in alloc_f.columns else ('团队' if '团队' in alloc_f.columns else None)
+            if team_col and (office_name or team_name):
+                key = office_name or team_name
+                alloc_f = alloc_f[alloc_f[team_col].astype(str).str.contains(key, na=False)].copy()
+            if '门店' in alloc_f.columns:
+                alloc_f['_store'] = alloc_f['门店'].map(_normalize_store_name)
+
+        s_tax = _to_num(alloc_f['门店税费']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '门店税费' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
+        s_qiye = _to_num(alloc_f['企信分摊金额']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '企信分摊金额' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
+        s_daizhang = _to_num(alloc_f['10月下费用']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '10月下费用' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
+
+        # ========== 组装输出 ==========
+        rows: List[Dict[str, Any]] = []
+        for st in stores:
+            row: Dict[str, Any] = {c: None for c in columns}
+            row['年份'] = year
+            row['月份'] = month
+            row['市场'] = market_name
+            row['办公室'] = office_name
+            row['所属实体店门店名称'] = st
+            row['erp门店名称'] = st
+            row['门店名称（自定义）'] = st
+            if st in store_id_map:
+                row['erp门店编号'] = store_id_map[st]
+            if st in manager_map:
+                row['店长姓名'] = manager_map[st]
+
+            # 收入
+            row['计业绩产品收入'] = float(s_rev_main_perf.get(st, 0))
+            row['不计业绩产品收入'] = float(s_rev_main_nonperf.get(st, 0))
+            row['产品退货'] = float(-s_ret_amt_main.get(st, 0))
+            row['计业绩团品收入'] = float(s_rev_group_perf.get(st, 0))
+            row['不计业绩团品收入'] = float(s_rev_group_nonperf.get(st, 0))
+            row['一、收入'] = (
+                row['计业绩产品收入']
+                + row['不计业绩产品收入']
+                + row['产品退货']
+                + row['计业绩团品收入']
+                + row['不计业绩团品收入']
+            )
+
+            # 成本
+            row['计业绩产品成本'] = float(s_cost_main_perf.get(st, 0))
+            row['计业绩产品赠品（主品）'] = float(s_cost_main_gift.get(st, 0))
+            row['不计业绩产品成本'] = float(s_cost_main_nonperf.get(st, 0))
+            row['退货成本'] = float(-s_ret_cost_all.get(st, 0))
+            row['计业绩团品成本'] = float(s_cost_group_perf.get(st, 0))
+            row['不计业绩团品成本'] = float(s_cost_group_nonperf.get(st, 0))
+            row['二、成本'] = (
+                row['计业绩产品成本']
+                + row['计业绩产品赠品（主品）']
+                + row['不计业绩产品成本']
+                + row['退货成本']
+                + row['计业绩团品成本']
+                + row['不计业绩团品成本']
+            )
+
+            # 费用（只填能从来源表明确得到的）
+            row['一线工资'] = float(s_salary.get(st, 0))
+            if not funds_pivot.empty:
+                row['一线社保'] = float(funds_pivot.get('一线社保', pd.Series(dtype=float)).get(st, 0))
+                row['高管社保'] = float(funds_pivot.get('高管社保', pd.Series(dtype=float)).get(st, 0))
+                row['门店水、电、液化气'] = float(funds_pivot.get('门店水、电、液化气', pd.Series(dtype=float)).get(st, 0))
+            row['任务款'] = float(s_task.get(st, 0))
+            row['门店房租'] = float(rent_s.get(st, 0))
+            row['代账费'] = float(s_daizhang.get(st, 0))
+            row['门店税费'] = float(s_tax.get(st, 0))
+            row['企微年费分摊'] = float(s_qiye.get(st, 0))
+            row['富友手续费（千分之2.2）'] = float(s_fuiou_fee.get(st, 0))
+
+            expense_parts = [
+                row.get('一线工资', 0) or 0,
+                row.get('一线社保', 0) or 0,
+                row.get('高管社保', 0) or 0,
+                row.get('门店水、电、液化气', 0) or 0,
+                row.get('任务款', 0) or 0,
+                row.get('门店房租', 0) or 0,
+                row.get('代账费', 0) or 0,
+                row.get('门店税费', 0) or 0,
+                row.get('企微年费分摊', 0) or 0,
+                row.get('富友手续费（千分之2.2）', 0) or 0,
+            ]
+            row['三、费用'] = float(sum(expense_parts))
+
+            row['四、利润'] = float(row['一、收入'] - row['二、成本'] - row['三、费用'])
+            rows.append(row)
+
+        return pd.DataFrame(rows, columns=columns)
+
+    def _execute_profit_income(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
+        df = df.copy()
+
+        def req(col_key: str) -> str:
+            v = (config or {}).get(col_key)
+            v = '' if v is None else str(v).strip()
+            if not v:
+                raise ValueError(f"收入节点缺少配置：{col_key}")
+            if v not in df.columns:
+                raise ValueError(f"收入节点找不到列 '{v}'（{col_key}）。现有列: {list(df.columns)}")
+            return v
+
+        team_col = req('team_col')
+        date_col = req('date_col')
+        product_col = req('product_type_col')
+        perf_col = req('perf_flag_col')
+        perf_amount_col = req('perf_amount_col')
+        nonperf_amount_col = req('nonperf_amount_col')
+
+        # 可选：状态过滤
+        if bool((config or {}).get('filter_by_status')):
+            status_col = str((config or {}).get('status_col') or '').strip()
+            allowed = (config or {}).get('allowed_status_values') or []
+            allowed = [str(x).strip() for x in (allowed if isinstance(allowed, list) else [allowed]) if str(x).strip()]
+            if status_col and status_col in df.columns and allowed:
+                df = df[df[status_col].astype(str).isin(set(allowed))].copy()
+
+        dt = pd.to_datetime(df[date_col], errors='coerce')
+        df['_year'] = dt.dt.year
+        df['_month'] = dt.dt.month
+        df['_team'] = df[team_col].astype(str).replace({'nan': '', 'None': ''}).fillna('')
+        df['_team'] = df['_team'].where(df['_team'].astype(str).str.len() > 0, '未知团队')
+
+        main_vals = (config or {}).get('main_product_values') or []
+        group_vals = (config or {}).get('group_product_values') or []
+        perf_vals = (config or {}).get('perf_values') or []
+        main_vals = set(map(str, main_vals if isinstance(main_vals, list) else [main_vals]))
+        group_vals = set(map(str, group_vals if isinstance(group_vals, list) else [group_vals]))
+        perf_vals = set(map(str, perf_vals if isinstance(perf_vals, list) else [perf_vals]))
+
+        prod = df[product_col].astype(str)
+        perf = df[perf_col].astype(str)
+        is_main = prod.isin(main_vals)
+        is_group = prod.isin(group_vals)
+        is_perf = perf.isin(perf_vals)
+
+        amt_perf = pd.to_numeric(df[perf_amount_col], errors='coerce').fillna(0)
+        amt_nonperf = pd.to_numeric(df[nonperf_amount_col], errors='coerce').fillna(0)
+
+        df['_rev_main_perf'] = amt_perf.where(is_main & is_perf, 0)
+        df['_rev_main_nonperf'] = amt_nonperf.where(is_main & (~is_perf), 0)
+        df['_rev_group_perf'] = amt_perf.where(is_group & is_perf, 0)
+        df['_rev_group_nonperf'] = amt_nonperf.where(is_group & (~is_perf), 0)
+
+        out = (
+            df.dropna(subset=['_year', '_month'])
+            .groupby(['_year', '_month', '_team'], dropna=False)[
+                ['_rev_main_perf', '_rev_main_nonperf', '_rev_group_perf', '_rev_group_nonperf']
+            ]
+            .sum()
+            .reset_index()
+        )
+
+        out = out.rename(
+            columns={
+                '_year': '年份',
+                '_month': '月份',
+                '_team': '办公室',
+                '_rev_main_perf': '计业绩产品收入',
+                '_rev_main_nonperf': '不计业绩产品收入',
+                '_rev_group_perf': '计业绩团品收入',
+                '_rev_group_nonperf': '不计业绩团品收入',
+            }
+        )
+        return out
+
+    def _execute_profit_cost(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
+        df = df.copy()
+
+        def req(col_key: str) -> str:
+            v = (config or {}).get(col_key)
+            v = '' if v is None else str(v).strip()
+            if not v:
+                raise ValueError(f"成本节点缺少配置：{col_key}")
+            if v not in df.columns:
+                raise ValueError(f"成本节点找不到列 '{v}'（{col_key}）。现有列: {list(df.columns)}")
+            return v
+
+        team_col = req('team_col')
+        date_col = req('date_col')
+        product_col = req('product_type_col')
+        perf_col = req('perf_flag_col')
+        qty_col = req('signed_qty_col')
+
+        # 可选：状态过滤
+        if bool((config or {}).get('filter_by_status')):
+            status_col = str((config or {}).get('status_col') or '').strip()
+            allowed = (config or {}).get('allowed_status_values') or []
+            allowed = [str(x).strip() for x in (allowed if isinstance(allowed, list) else [allowed]) if str(x).strip()]
+            if status_col and status_col in df.columns and allowed:
+                df = df[df[status_col].astype(str).isin(set(allowed))].copy()
+
+        dt = pd.to_datetime(df[date_col], errors='coerce')
+        df['_year'] = dt.dt.year
+        df['_month'] = dt.dt.month
+        df['_team'] = df[team_col].astype(str).replace({'nan': '', 'None': ''}).fillna('')
+        df['_team'] = df['_team'].where(df['_team'].astype(str).str.len() > 0, '未知团队')
+
+        main_vals = (config or {}).get('main_product_values') or []
+        group_vals = (config or {}).get('group_product_values') or []
+        perf_vals = (config or {}).get('perf_values') or []
+        main_vals = set(map(str, main_vals if isinstance(main_vals, list) else [main_vals]))
+        group_vals = set(map(str, group_vals if isinstance(group_vals, list) else [group_vals]))
+        perf_vals = set(map(str, perf_vals if isinstance(perf_vals, list) else [perf_vals]))
+
+        prod = df[product_col].astype(str)
+        perf = df[perf_col].astype(str)
+        is_main = prod.isin(main_vals)
+        is_group = prod.isin(group_vals)
+        is_perf = perf.isin(perf_vals)
+
+        qty = pd.to_numeric(df[qty_col], errors='coerce').fillna(0)
+        unit_cost = float((config or {}).get('main_unit_cost') or 0)
+
+        df['_cost_main_perf'] = (qty.where(is_main & is_perf, 0) * unit_cost)
+        df['_cost_main_nonperf'] = (qty.where(is_main & (~is_perf), 0) * unit_cost)
+
+        # 团品成本（可选列）
+        g_perf_col = str((config or {}).get('group_cost_perf_col') or '').strip()
+        g_nonperf_col = str((config or {}).get('group_cost_nonperf_col') or '').strip()
+        if g_perf_col and g_perf_col not in df.columns:
+            raise ValueError(f"成本节点找不到列 '{g_perf_col}'（group_cost_perf_col）。现有列: {list(df.columns)}")
+        if g_nonperf_col and g_nonperf_col not in df.columns:
+            raise ValueError(f"成本节点找不到列 '{g_nonperf_col}'（group_cost_nonperf_col）。现有列: {list(df.columns)}")
+
+        g_perf = pd.to_numeric(df[g_perf_col], errors='coerce').fillna(0) if g_perf_col else 0
+        g_nonperf = pd.to_numeric(df[g_nonperf_col], errors='coerce').fillna(0) if g_nonperf_col else 0
+        df['_cost_group_perf'] = g_perf.where(is_group & is_perf, 0) if g_perf_col else 0
+        df['_cost_group_nonperf'] = g_nonperf.where(is_group & (~is_perf), 0) if g_nonperf_col else 0
+
+        out = (
+            df.dropna(subset=['_year', '_month'])
+            .groupby(['_year', '_month', '_team'], dropna=False)[
+                ['_cost_main_perf', '_cost_main_nonperf', '_cost_group_perf', '_cost_group_nonperf']
+            ]
+            .sum()
+            .reset_index()
+        )
+
+        out = out.rename(
+            columns={
+                '_year': '年份',
+                '_month': '月份',
+                '_team': '办公室',
+                '_cost_main_perf': '计业绩产品成本',
+                '_cost_main_nonperf': '不计业绩产品成本',
+                '_cost_group_perf': '计业绩团品成本',
+                '_cost_group_nonperf': '不计业绩团品成本',
+            }
+        )
+        return out
+
+    def _execute_profit_expense(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty or len(df.columns) == 0:
+            return pd.DataFrame(columns=[
+                '年份', '月份', '办公室',
+                '一线工资', '红包', '任务款',
+                '门店房租', '门店水、电、液化气', '门店物业费',
+                '其他分摊', '其他费用'
+            ])
+
+        df = df.copy()
+
+        def req(col_key: str) -> str:
+            v = (config or {}).get(col_key)
+            v = '' if v is None else str(v).strip()
+            if not v:
+                raise ValueError(f"费用节点缺少配置：{col_key}")
+            if v not in df.columns:
+                raise ValueError(f"费用节点找不到列 '{v}'（{col_key}）。现有列: {list(df.columns)}")
+            return v
+
+        team_col = req('team_col')
+        date_col = req('date_col')
+
+        def opt_amount(col_key: str) -> pd.Series:
+            col = str((config or {}).get(col_key) or '').strip()
+            if not col:
+                return pd.Series([0] * len(df))
+            if col not in df.columns:
+                raise ValueError(f"费用节点找不到列 '{col}'（{col_key}）。现有列: {list(df.columns)}")
+            return pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        dt = pd.to_datetime(df[date_col], errors='coerce')
+        df['_year'] = dt.dt.year
+        df['_month'] = dt.dt.month
+        df['_team'] = df[team_col].astype(str).replace({'nan': '', 'None': ''}).fillna('')
+        df['_team'] = df['_team'].where(df['_team'].astype(str).str.len() > 0, '未知团队')
+
+        df['_salary'] = opt_amount('salary_col')
+        df['_redpacket'] = opt_amount('redpacket_col')
+        df['_task'] = opt_amount('task_col')
+        df['_rent'] = opt_amount('rent_col')
+        df['_utilities'] = opt_amount('utilities_col')
+        df['_property'] = opt_amount('property_col')
+        df['_alloc'] = opt_amount('alloc_col')
+        df['_other'] = opt_amount('other_col')
+
+        out = (
+            df.dropna(subset=['_year', '_month'])
+            .groupby(['_year', '_month', '_team'], dropna=False)[
+                ['_salary', '_redpacket', '_task', '_rent', '_utilities', '_property', '_alloc', '_other']
+            ]
+            .sum()
+            .reset_index()
+        )
+
+        out = out.rename(
+            columns={
+                '_year': '年份',
+                '_month': '月份',
+                '_team': '办公室',
+                '_salary': '一线工资',
+                '_redpacket': '红包',
+                '_task': '任务款',
+                '_rent': '门店房租',
+                '_utilities': '门店水、电、液化气',
+                '_property': '门店物业费',
+                '_alloc': '其他分摊',
+                '_other': '其他费用',
+            }
+        )
+
+        return out
+
+    def _execute_profit_summary(self, input_dfs: List[pd.DataFrame], config: Dict, context: WorkflowContext) -> pd.DataFrame:
+        cfg = config or {}
+
+        def _get_df_by_node_id(key: str) -> Optional[pd.DataFrame]:
+            node_id = str(cfg.get(key) or '').strip()
+            if not node_id:
+                return None
+            try:
+                df0 = context.get_result(node_id)
+                return df0.copy() if isinstance(df0, pd.DataFrame) else None
+            except Exception:
+                return None
+
+        income_df = _get_df_by_node_id('income_node_id')
+        cost_df = _get_df_by_node_id('cost_node_id')
+        expense_df = _get_df_by_node_id('expense_node_id')
+
+        # 兼容：未配置节点ID时，按输入顺序推断（income, cost, expense）
+        inputs = [d for d in (input_dfs or []) if isinstance(d, pd.DataFrame)]
+        if income_df is None and len(inputs) >= 1:
+            income_df = inputs[0].copy()
+        if cost_df is None and len(inputs) >= 2:
+            cost_df = inputs[1].copy()
+        if expense_df is None and len(inputs) >= 3:
+            expense_df = inputs[2].copy()
+
+        key_cols = ['年份', '月份', '办公室']
+
+        def _ensure_keys(df: pd.DataFrame, name: str) -> pd.DataFrame:
+            for k in key_cols:
+                if k not in df.columns:
+                    raise ValueError(f"利润表汇总缺少键列 '{k}'（来自 {name}）。现有列: {list(df.columns)}")
+            out = df.copy()
+            out['年份'] = pd.to_numeric(out['年份'], errors='coerce')
+            out['月份'] = pd.to_numeric(out['月份'], errors='coerce')
+            out['办公室'] = out['办公室'].astype(str).replace({'nan': '', 'None': ''}).fillna('')
+            return out
+
+        base = None
+        if isinstance(income_df, pd.DataFrame):
+            base = _ensure_keys(income_df, '收入')
+        elif isinstance(cost_df, pd.DataFrame):
+            base = _ensure_keys(cost_df, '成本')
+        elif isinstance(expense_df, pd.DataFrame):
+            base = _ensure_keys(expense_df, '费用')
+        else:
+            raise ValueError("利润表汇总节点没有可用输入：请连接收入/成本/费用节点，或在配置中指定来源节点")
+
+        def _merge_into(left: pd.DataFrame, right: Optional[pd.DataFrame], name: str) -> pd.DataFrame:
+            if not isinstance(right, pd.DataFrame):
+                return left
+            right2 = _ensure_keys(right, name)
+            return pd.merge(left, right2, on=key_cols, how='outer')
+
+        merged = base
+        merged = _merge_into(merged, income_df if base is not income_df else None, '收入')
+        merged = _merge_into(merged, cost_df if base is not cost_df else None, '成本')
+        merged = _merge_into(merged, expense_df if base is not expense_df else None, '费用')
+
+        # 统一数值列为 numeric，缺失填0
+        income_cols = ['计业绩产品收入', '不计业绩产品收入', '计业绩团品收入', '不计业绩团品收入']
+        cost_cols = ['计业绩产品成本', '不计业绩产品成本', '计业绩团品成本', '不计业绩团品成本']
+        expense_cols = ['一线工资', '红包', '任务款', '门店房租', '门店水、电、液化气', '门店物业费', '其他分摊', '其他费用']
+
+        for col in income_cols + cost_cols + expense_cols:
+            if col in merged.columns:
+                merged[col] = pd.to_numeric(merged[col], errors='coerce').fillna(0)
+            else:
+                merged[col] = 0
+
+        merged['一、收入'] = merged[income_cols].sum(axis=1)
+        merged['二、成本'] = merged[cost_cols].sum(axis=1)
+        merged['三、费用'] = merged[expense_cols].sum(axis=1)
+        merged['四、利润'] = merged['一、收入'] - merged['二、成本'] - merged['三、费用']
+
+        # 排序输出
+        merged = merged.sort_values(['年份', '月份', '办公室'], ascending=[True, True, True])
+        out_cols = key_cols + income_cols + cost_cols + expense_cols + ['一、收入', '二、成本', '三、费用', '四、利润']
+        # 保留原表中额外字段（如果上游有更多列），但把核心列放前面
+        extra_cols = [c for c in merged.columns if c not in out_cols]
+        return merged[out_cols + extra_cols]
 
     # ========== AI/自动化实现 ==========
     def _execute_code(self, input_dfs: List[pd.DataFrame], config: Dict, context: WorkflowContext) -> pd.DataFrame:

@@ -5,6 +5,9 @@ import os
 import uuid
 import json
 from typing import List, Dict, Any, Optional
+from datetime import date, datetime, time
+import decimal
+import math
 import pandas as pd
 from openpyxl import load_workbook
 import aiosqlite
@@ -14,6 +17,63 @@ from database import DATABASE_PATH
 
 class ExcelService:
     """Excel文件处理服务"""
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """
+        将 openpyxl/pandas 读出的值转换为可 JSON 序列化的基础类型。
+        仅用于保存 sheets 元数据（columns/row_count/preview）到数据库。
+        """
+        if value is None:
+            return None
+
+        # 容错：NaN/Inf
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
+
+        # 日期时间
+        if isinstance(value, datetime):
+            # 统一秒级，避免出现过长小数秒
+            try:
+                return value.isoformat(sep=' ', timespec='seconds')
+            except Exception:
+                return value.isoformat()
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, time):
+            try:
+                return value.isoformat(timespec='seconds')
+            except Exception:
+                return value.isoformat()
+
+        # Decimal 等
+        if isinstance(value, decimal.Decimal):
+            return float(value)
+
+        # numpy 标量等（如果存在 .item()）
+        item = getattr(value, 'item', None)
+        if callable(item):
+            try:
+                return item()
+            except Exception:
+                pass
+
+        # bytes
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                return value.decode('utf-8', errors='replace')
+            except Exception:
+                return str(value)
+
+        # 递归结构
+        if isinstance(value, (list, tuple)):
+            return [ExcelService._json_safe(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): ExcelService._json_safe(v) for k, v in value.items()}
+
+        return value
     
     @staticmethod
     def parse_excel(file_path: str) -> Dict[str, Any]:
@@ -51,7 +111,7 @@ class ExcelService:
             # 获取预览数据（前5行）
             preview = []
             for row in sheet.iter_rows(min_row=2, max_row=6, values_only=True):
-                preview.append(list(row))
+                preview.append([ExcelService._json_safe(v) for v in row])
             
             sheets_info.append({
                 "name": sheet_name,

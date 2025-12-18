@@ -63,6 +63,13 @@ const NODE_TYPES_CONFIG = {
         description: '读取CSV/TSV文件',
         category: 'source'
     },
+    source_optional: {
+        color: '#34C759',
+        label: '可选Excel读取',
+        icon: <DatabaseOutlined />,
+        description: '未配置则输出空表',
+        category: 'source'
+    },
 
     // === 数据清洗 ===
     transform: {
@@ -168,6 +175,43 @@ const NODE_TYPES_CONFIG = {
         category: 'multi'
     },
 
+    // === 利润表（业务模块） ===
+    profit_income: {
+        color: '#34C759',
+        label: '收入',
+        icon: <BarChartOutlined />,
+        description: '按团队-月份汇总收入',
+        category: 'profit'
+    },
+    profit_cost: {
+        color: '#34C759',
+        label: '成本',
+        icon: <CalculatorOutlined />,
+        description: '按团队-月份汇总成本',
+        category: 'profit'
+    },
+    profit_expense: {
+        color: '#34C759',
+        label: '其他费用',
+        icon: <ToolOutlined />,
+        description: '按团队-月份汇总费用',
+        category: 'profit'
+    },
+    profit_summary: {
+        color: '#34C759',
+        label: '利润表汇总',
+        icon: <ExportOutlined />,
+        description: '收入-成本-费用=利润',
+        category: 'profit'
+    },
+    profit_table: {
+        color: '#34C759',
+        label: '利润表',
+        icon: <TableOutlined />,
+        description: '从单个工作簿多Sheet推导利润表',
+        category: 'profit'
+    },
+
     // === AI/自动化 ===
     ai_agent: {
         color: '#FF2D55',
@@ -205,6 +249,7 @@ const NODE_TYPES_CONFIG = {
 const NODE_CATEGORIES = {
     preset: { label: '预设', icon: <ThunderboltOutlined />, color: '#AF52DE' },
     custom: { label: '自定义', icon: <ProfileOutlined />, color: '#5AC8FA' },
+    profit: { label: '利润表', icon: <BarChartOutlined />, color: '#34C759' },
     source: { label: '数据源', icon: <DatabaseOutlined />, color: '#34C759' },
     transform: { label: '数据清洗', icon: <FilterOutlined />, color: '#007AFF' },
     analytics: { label: '数据分析', icon: <BarChartOutlined />, color: '#FF9500' },
@@ -517,6 +562,124 @@ const PRESET_WORKFLOWS = [
                 { source: 'erp', target: 'compare' },
                 { source: 'compare', target: 'out' }
             ]
+        }
+    }
+    ,
+    {
+        id: 'preset_profit_team_month',
+        name: '利润表（团队-月份）',
+        description: '订单明细(收入/成本) + 费用明细 → 利润汇总 → 输出',
+        config: {
+            nodes: [
+                { id: 'orders', type: 'source', label: '订单明细', config: {} },
+                { id: 'income', type: 'profit_income', label: '收入', config: {} },
+                { id: 'cost', type: 'profit_cost', label: '成本', config: {} },
+                { id: 'fees', type: 'source_optional', label: '费用明细（可选）', config: {} },
+                { id: 'expense', type: 'profit_expense', label: '其他费用', config: {} },
+                { id: 'summary', type: 'profit_summary', label: '利润表汇总', config: { income_node_id: 'income', cost_node_id: 'cost', expense_node_id: 'expense' } },
+                { id: 'out', type: 'output', label: '输出Excel', config: { filename: '团队利润表_结果.xlsx' } }
+            ],
+            edges: [
+                { source: 'orders', target: 'income' },
+                { source: 'orders', target: 'cost' },
+                { source: 'fees', target: 'expense' },
+                { source: 'income', target: 'summary' },
+                { source: 'cost', target: 'summary' },
+                { source: 'expense', target: 'summary' },
+                { source: 'summary', target: 'out' }
+            ]
+        }
+    },
+    {
+        id: 'preset_profit_accounting',
+        name: '利润核算',
+        description: '订单明细(收入/成本) + 可选费用 → 利润汇总（团队-月份）→ 输出',
+        config: {
+            nodes: [
+                { id: 'orders', type: 'source', label: '订单明细', config: {} },
+                {
+                    id: 'income',
+                    type: 'profit_income',
+                    label: '收入',
+                    config: {
+                        team_col: '所属团队',
+                        date_col: '订单提交时间',
+                        product_type_col: '商品类型',
+                        perf_flag_col: '是否计入业绩',
+                        perf_amount_col: '计入业绩金额',
+                        nonperf_amount_col: '回款金额',
+                        main_product_values: ['主品'],
+                        group_product_values: ['团品'],
+                        perf_values: ['计入业绩'],
+                        filter_by_status: false
+                    }
+                },
+                {
+                    id: 'cost',
+                    type: 'profit_cost',
+                    label: '成本',
+                    config: {
+                        team_col: '所属团队',
+                        date_col: '订单提交时间',
+                        product_type_col: '商品类型',
+                        perf_flag_col: '是否计入业绩',
+                        signed_qty_col: '顾客确认数量',
+                        main_unit_cost: 0,
+                        group_cost_perf_col: '',
+                        group_cost_nonperf_col: '',
+                        main_product_values: ['主品'],
+                        group_product_values: ['团品'],
+                        perf_values: ['计入业绩'],
+                        filter_by_status: false
+                    }
+                },
+                { id: 'fees', type: 'source_optional', label: '费用明细（可选）', config: {} },
+                {
+                    id: 'expense',
+                    type: 'profit_expense',
+                    label: '其他费用',
+                    config: {
+                        team_col: '所属团队',
+                        date_col: '日期',
+                        salary_col: '',
+                        redpacket_col: '',
+                        task_col: '',
+                        rent_col: '',
+                        utilities_col: '',
+                        property_col: '',
+                        alloc_col: '',
+                        other_col: ''
+                    }
+                },
+                { id: 'summary', type: 'profit_summary', label: '利润汇总', config: { income_node_id: 'income', cost_node_id: 'cost', expense_node_id: 'expense' } },
+                { id: 'out', type: 'output', label: '输出Excel', config: { filename: '利润核算_结果.xlsx' } }
+            ],
+            edges: [
+                { source: 'orders', target: 'income' },
+                { source: 'orders', target: 'cost' },
+                { source: 'fees', target: 'expense' },
+                { source: 'income', target: 'summary' },
+                { source: 'cost', target: 'summary' },
+                { source: 'expense', target: 'summary' },
+                { source: 'summary', target: 'out' }
+            ]
+        }
+    },
+    {
+        id: 'preset_profit_table',
+        name: '利润表',
+        description: '从单个工作簿的来源Sheet自动推导利润表（能算的列自动填，其他留空）',
+        config: {
+            nodes: [
+                {
+                    id: 'profit_table',
+                    type: 'profit_table',
+                    label: '利润表',
+                    config: { team_name: '邯郸刘洋', year: 2025, month: 10 }
+                },
+                { id: 'out', type: 'output', label: '输出Excel', config: { filename: '利润表_结果.xlsx' } }
+            ],
+            edges: [{ source: 'profit_table', target: 'out' }]
         }
     }
 ];
@@ -1481,6 +1644,9 @@ function App() {
             case 'source_csv':
                 const file = files.find(f => getFileId(f) === config.file_id);
                 return file ? `${file.filename.slice(0, 10)}...` : '未选择文件';
+            case 'source_optional':
+                const optFile = files.find(f => getFileId(f) === config.file_id);
+                return optFile ? `${optFile.filename.slice(0, 10)}...` : '未配置（空表）';
             case 'transform': return config.filter_code || '数据处理';
             case 'join': return config.how ? `${config.how} join` : '配置关联';
             case 'group_aggregate': return config.group_by?.join(', ') || '分组聚合';
@@ -1489,6 +1655,14 @@ function App() {
             case 'pivot': return '透视表';
             case 'code': return 'Python脚本';
             case 'ai_agent': return config.target_column || 'AI处理';
+            case 'profit_income': return '收入汇总';
+            case 'profit_cost': return '成本汇总';
+            case 'profit_expense': return '费用汇总';
+            case 'profit_summary': return '利润汇总';
+            case 'profit_table': {
+                const f2 = files.find(f => getFileId(f) === config.file_id);
+                return f2 ? `${f2.filename.slice(0, 10)}...` : '未选择文件';
+            }
             case 'output':
             case 'output_csv': return config.filename || '输出文件';
             default: return '已配置';
@@ -2884,6 +3058,68 @@ function App() {
                     </>
                 );
 
+            case 'source_optional': {
+                const optSheetOptions = getSheetOptions(configFileId);
+                const optSelectedSheet = nodeForm.getFieldValue('sheet_name');
+                const optSelectedSheetCols = getColumnOptions(configFileId, optSelectedSheet);
+
+                return (
+                    <>
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            🟢 可选读取：如果不选择文件，将输出 <b>空表</b>（用于费用表暂缺时仍可跑通利润表）
+                        </div>
+
+                        <Form.Item label="选择Excel文件（可选）" name="file_id">
+                            <Select
+                                placeholder="可不选（输出空表）"
+                                allowClear
+                                onChange={(val) => {
+                                    setConfigFileId(val || null);
+                                    nodeForm.setFieldValue('sheet_name', undefined);
+                                }}
+                            >
+                                {files.filter(f => f.filename.endsWith('.xlsx') || f.filename.endsWith('.xls'))
+                                    .map(f => <Option key={f.file_id} value={f.file_id}>{f.filename}</Option>)}
+                            </Select>
+                        </Form.Item>
+
+                        {optSheetOptions.length > 0 && (
+                            <Form.Item label="输出Sheet（可选）" name="sheet_name">
+                                <Select placeholder="选择此节点输出的Sheet" allowClear>
+                                    {optSheetOptions.map(s => (
+                                        <Option key={s.value} value={s.value}>{s.label}</Option>
+                                    ))}
+                                </Select>
+                            </Form.Item>
+                        )}
+
+                        {optSelectedSheet && configFileId && (
+                            <>
+                                <Button
+                                    type="link"
+                                    icon={<EyeOutlined />}
+                                    onClick={() => handlePreview(configFileId, optSelectedSheet)}
+                                    style={{ padding: 0, marginBottom: 12 }}
+                                >
+                                    预览 {optSelectedSheet} 数据
+                                </Button>
+
+                                {optSelectedSheetCols.length > 0 && (
+                                    <div style={{ marginBottom: 16, padding: 10, background: '#f0f9ff', borderRadius: 8, fontSize: 12 }}>
+                                        <div style={{ fontWeight: 600, marginBottom: 4 }}><ProfileOutlined /> 此节点将输出 {optSelectedSheetCols.length} 列：</div>
+                                        <div style={{ color: '#666' }}>{optSelectedSheetCols.map(c => c.value).join(', ')}</div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        <Form.Item label="表头行号" name="header_row" tooltip="默认第1行为表头">
+                            <InputNumber min={1} placeholder="1" style={{ width: '100%' }} />
+                        </Form.Item>
+                    </>
+                );
+            }
+
             case 'source_csv':
                 return (
                     <>
@@ -3490,6 +3726,253 @@ function App() {
                         </Form.Item>
                     </>
                 );
+
+            // === 利润表（业务模块）===
+            case 'profit_table': {
+                return (
+                    <>
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            ✅ 选择一个工作簿后，系统会从其中的多个来源 Sheet（订单明细/直播间/退货/资金日报/分摊费用/工资表/财务系统/富友流水/房租/市场定额…）
+                            自动推导一张<strong>利润表</strong>：能算的列自动填充，其它列留空。
+                        </div>
+
+                        <Form.Item label="选择Excel文件" name="file_id" rules={[{ required: true, message: '请选择Excel文件' }]}>
+                            <Select placeholder="选择包含来源Sheet的工作簿">
+                                {files
+                                    .filter(f => (f.filename || '').toLowerCase().endsWith('.xlsx') || (f.filename || '').toLowerCase().endsWith('.xls'))
+                                    .map(f => <Option key={getFileId(f)} value={getFileId(f)}>{f.filename}</Option>)}
+                            </Select>
+                        </Form.Item>
+
+                        <Divider orientation="left">可选筛选</Divider>
+                        <Form.Item label="团队（可选）" name="team_name" tooltip="留空将自动从来源表推断（通常取出现次数最多的团队）">
+                            <Input placeholder="例如：邯郸刘洋" />
+                        </Form.Item>
+                        <Form.Item label="市场（可选）" name="market_name" tooltip="留空默认取团队前2个字，如：邯郸">
+                            <Input placeholder="例如：邯郸" />
+                        </Form.Item>
+                        <Form.Item label="办公室（可选）" name="office_name" tooltip="留空默认用团队去掉市场前缀，如：刘洋">
+                            <Input placeholder="例如：刘洋" />
+                        </Form.Item>
+                        <Form.Item label="年份（可选）" name="year" tooltip="留空将从日期列推断">
+                            <InputNumber min={2000} max={2100} style={{ width: '100%' }} placeholder="例如：2025" />
+                        </Form.Item>
+                        <Form.Item label="月份（可选）" name="month" tooltip="留空将从日期列推断">
+                            <InputNumber min={1} max={12} style={{ width: '100%' }} placeholder="例如：10" />
+                        </Form.Item>
+                    </>
+                );
+            }
+
+            case 'profit_income': {
+                const cols = getAvailableColumns();
+                return (
+                    <>
+                        {inputInfo}
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            📊 将订单明细按 <b>团队(办公室)+年份+月份</b> 汇总为 4 个收入口径：主品/团品 × 计业绩/不计业绩
+                        </div>
+
+                        <Divider orientation="left">维度与时间</Divider>
+                        <Form.Item label="团队列（办公室）" name="team_col" initialValue="所属团队" rules={[{ required: true }]}>
+                            <Select placeholder="选择团队列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="日期列" name="date_col" initialValue="订单提交时间" rules={[{ required: true }]}>
+                            <Select placeholder="选择日期列" options={cols} showSearch />
+                        </Form.Item>
+
+                        <Divider orientation="left">分类口径</Divider>
+                        <Form.Item label="商品类型列" name="product_type_col" initialValue="商品类型" rules={[{ required: true }]}>
+                            <Select placeholder="选择商品类型列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="主品取值" name="main_product_values" initialValue={['主品', '门店自有品']}>
+                            <Select mode="tags" placeholder="如：主品、门店自有品" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+                        <Form.Item label="团品取值" name="group_product_values" initialValue={['团品']}>
+                            <Select mode="tags" placeholder="如：团品" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+                        <Form.Item label="业绩标记列" name="perf_flag_col" initialValue="是否计入业绩" rules={[{ required: true }]}>
+                            <Select placeholder="选择业绩标记列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="计业绩取值" name="perf_values" initialValue={['计入业绩']}>
+                            <Select mode="tags" placeholder="如：计入业绩" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+
+                        <Divider orientation="left">金额口径</Divider>
+                        <Form.Item label="计业绩金额列" name="perf_amount_col" initialValue="计入业绩金额" rules={[{ required: true }]}>
+                            <Select placeholder="选择计业绩金额列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="不计业绩金额列" name="nonperf_amount_col" initialValue="回款金额" rules={[{ required: true }]}>
+                            <Select placeholder="选择不计业绩金额列" options={cols} showSearch />
+                        </Form.Item>
+
+                        <Divider orientation="left">可选过滤</Divider>
+                        <Form.Item label="订单状态列" name="status_col" initialValue="订单状态">
+                            <Select placeholder="选择订单状态列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="仅统计指定状态" name="filter_by_status" valuePropName="checked" initialValue={false}>
+                            <Switch />
+                        </Form.Item>
+                        <Form.Item noStyle shouldUpdate={(p, n) => p.filter_by_status !== n.filter_by_status}>
+                            {({ getFieldValue }) =>
+                                getFieldValue('filter_by_status') ? (
+                                    <Form.Item label="允许状态" name="allowed_status_values" initialValue={['已完成']}>
+                                        <Select mode="tags" placeholder="如：已完成" tokenSeparators={[',', '，']} />
+                                    </Form.Item>
+                                ) : null
+                            }
+                        </Form.Item>
+                    </>
+                );
+            }
+
+            case 'profit_cost': {
+                const cols = getAvailableColumns();
+                return (
+                    <>
+                        {inputInfo}
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            🧮 将订单明细按 <b>团队(办公室)+年份+月份</b> 汇总成本：主品成本 = 签收数量 × 主品成本单价；团品成本可选从列读取（否则为 0）
+                        </div>
+
+                        <Divider orientation="left">维度与时间</Divider>
+                        <Form.Item label="团队列（办公室）" name="team_col" initialValue="所属团队" rules={[{ required: true }]}>
+                            <Select placeholder="选择团队列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="日期列" name="date_col" initialValue="订单提交时间" rules={[{ required: true }]}>
+                            <Select placeholder="选择日期列" options={cols} showSearch />
+                        </Form.Item>
+
+                        <Divider orientation="left">分类口径</Divider>
+                        <Form.Item label="商品类型列" name="product_type_col" initialValue="商品类型" rules={[{ required: true }]}>
+                            <Select placeholder="选择商品类型列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="主品取值" name="main_product_values" initialValue={['主品', '门店自有品']}>
+                            <Select mode="tags" placeholder="如：主品、门店自有品" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+                        <Form.Item label="团品取值" name="group_product_values" initialValue={['团品']}>
+                            <Select mode="tags" placeholder="如：团品" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+                        <Form.Item label="业绩标记列" name="perf_flag_col" initialValue="是否计入业绩" rules={[{ required: true }]}>
+                            <Select placeholder="选择业绩标记列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="计业绩取值" name="perf_values" initialValue={['计入业绩']}>
+                            <Select mode="tags" placeholder="如：计入业绩" tokenSeparators={[',', '，']} />
+                        </Form.Item>
+
+                        <Divider orientation="left">主品成本</Divider>
+                        <Form.Item label="签收数量列" name="signed_qty_col" initialValue="顾客确认数量" rules={[{ required: true }]}>
+                            <Select placeholder="选择签收数量列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="主品成本单价" name="main_unit_cost" initialValue={0} rules={[{ required: true }]}>
+                            <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+                        </Form.Item>
+
+                        <Divider orientation="left">团品成本（可选）</Divider>
+                        <Form.Item label="团品计业绩成本列" name="group_cost_perf_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="团品不计业绩成本列" name="group_cost_nonperf_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+
+                        <Divider orientation="left">可选过滤</Divider>
+                        <Form.Item label="订单状态列" name="status_col" initialValue="订单状态">
+                            <Select placeholder="选择订单状态列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="仅统计指定状态" name="filter_by_status" valuePropName="checked" initialValue={false}>
+                            <Switch />
+                        </Form.Item>
+                        <Form.Item noStyle shouldUpdate={(p, n) => p.filter_by_status !== n.filter_by_status}>
+                            {({ getFieldValue }) =>
+                                getFieldValue('filter_by_status') ? (
+                                    <Form.Item label="允许状态" name="allowed_status_values" initialValue={['已完成']}>
+                                        <Select mode="tags" placeholder="如：已完成" tokenSeparators={[',', '，']} />
+                                    </Form.Item>
+                                ) : null
+                            }
+                        </Form.Item>
+                    </>
+                );
+            }
+
+            case 'profit_expense': {
+                const cols = getAvailableColumns();
+                return (
+                    <>
+                        {inputInfo}
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            🧾 将费用明细按 <b>团队(办公室)+年份+月份</b> 汇总（支持把费用列映射到模板科目：工资/红包/任务款/房租/水电/物业/分摊/其他）
+                        </div>
+
+                        <Divider orientation="left">维度与时间</Divider>
+                        <Form.Item label="团队列（办公室）" name="team_col" initialValue="所属团队" rules={[{ required: true }]}>
+                            <Select placeholder="选择团队列" options={cols} showSearch />
+                        </Form.Item>
+                        <Form.Item label="日期列" name="date_col" initialValue="日期" rules={[{ required: true }]}>
+                            <Select placeholder="选择日期列" options={cols} showSearch />
+                        </Form.Item>
+
+                        <Divider orientation="left">费用列映射（可选，未选则按 0）</Divider>
+                        <Form.Item label="一线工资列" name="salary_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="红包列" name="redpacket_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="任务款列" name="task_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="门店房租列" name="rent_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="门店水电列" name="utilities_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="门店物业费列" name="property_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="总部分摊/分摊列" name="alloc_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                        <Form.Item label="其他费用列" name="other_col">
+                            <Select placeholder="选择列（可选）" options={cols} showSearch allowClear />
+                        </Form.Item>
+                    </>
+                );
+            }
+
+            case 'profit_summary': {
+                const upstreamCandidates = allUpstreamNodes.map(n => ({
+                    label: n.isSource ? `${n.label} (${n.file || ''}/${n.sheet || ''})` : `${n.label} (处理结果)`,
+                    value: n.nodeId
+                }));
+
+                return (
+                    <>
+                        {inputInfo}
+                        <div style={{ marginBottom: 16, padding: 10, background: '#e8f5e9', borderRadius: 8, fontSize: 12, color: '#2e7d32' }}>
+                            ✅ 将 <b>收入</b>、<b>成本</b>、<b>其他费用</b> 三张汇总表按 <b>年份+月份+办公室(团队)</b> 合并，并计算：一、收入 / 二、成本 / 三、费用 / 四、利润
+                        </div>
+
+                        <Divider orientation="left">输入选择</Divider>
+                        <Form.Item label="收入来源节点" name="income_node_id" rules={[{ required: true, message: '请选择收入来源节点' }]}>
+                            <Select placeholder="选择上游的“收入”节点" options={upstreamCandidates} showSearch />
+                        </Form.Item>
+                        <Form.Item label="成本来源节点" name="cost_node_id" rules={[{ required: true, message: '请选择成本来源节点' }]}>
+                            <Select placeholder="选择上游的“成本”节点" options={upstreamCandidates} showSearch />
+                        </Form.Item>
+                        <Form.Item label="费用来源节点（可选）" name="expense_node_id">
+                            <Select placeholder="选择上游的“其他费用”节点（可选）" options={upstreamCandidates} allowClear showSearch />
+                        </Form.Item>
+
+                        <Divider orientation="left">说明</Divider>
+                        <div style={{ fontSize: 12, color: '#666' }}>
+                            汇总节点默认用列名 <code>年份</code>/<code>月份</code>/<code>办公室</code> 作为关联键；缺失的数值列按 0 处理。
+                        </div>
+                    </>
+                );
+            }
 
             case 'ai_agent':
                 return (
