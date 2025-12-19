@@ -9,7 +9,7 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
 
   /* 全局悬浮导航占位（供子页面对齐使用） */
-  --global-nav-offset: 0px;
+  --global-nav-offset: 50px;
   --global-nav-height: 52px;
 }
 
@@ -1057,6 +1057,7 @@ body {
   padding-top: var(--global-nav-offset) !important;
   height: 100vh;
   box-sizing: border-box;
+  background: var(--page-bg, var(--ios-bg));
 }
 
 .placeholder-page {

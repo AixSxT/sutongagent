@@ -4030,6 +4030,13 @@ function App() {
     ];
 
     // ============== 主界面 ==============
+    const pageBg =
+        currentView === 'search'
+            ? '#080808'
+            : currentView === 'vision'
+                ? '#f6f7fb'
+                : 'var(--ios-bg)';
+
     return (
         <Layout className="app-container">
             <Header className="app-header">
@@ -4045,7 +4052,7 @@ function App() {
                 ))}
             </Header>
 
-            <Content className="app-content">
+            <Content className="app-content" style={{ '--page-bg': pageBg }}>
                 {/* 画布视图 (Canvas) */}
                 {/* 画布视图 (Canvas) - 还原为原始全屏布局，并应用 Light/iOS 风格 */}
                 <div style={{ display: currentView === 'canvas' ? 'flex' : 'none', width: '100%', height: '100%', gap: 24, padding: 24, boxSizing: 'border-box', minHeight: 0 }}>
