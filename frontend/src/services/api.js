@@ -211,8 +211,10 @@ export const visionApi = {
         return response.data;
     },
 
-    eventsUrl: (jobId) => {
-        return `/api/vision/extract-text/events/${encodeURIComponent(jobId)}`;
+    eventsUrl: (jobId, after) => {
+        const base = `/api/vision/extract-text/events/${encodeURIComponent(jobId)}`;
+        if (!after) return base;
+        return `${base}?after=${encodeURIComponent(after)}`;
     }
 };
 

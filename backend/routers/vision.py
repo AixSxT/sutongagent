@@ -36,6 +36,9 @@ class _Job:
     queue: "asyncio.Queue[dict]"
     task: Optional[asyncio.Task]
     cancelled: bool = False
+    seq: int = 0
+    text_acc: str = ""
+    stage: str = "idle"
 
 
 _JOBS: dict[str, _Job] = {}
@@ -63,19 +66,23 @@ def _get_openai_client():
     return OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL, timeout=60.0)
 
 
-async def _emit(q: "asyncio.Queue[dict]", event: str, data: dict) -> None:
-    await q.put({"event": event, "data": data, "ts": time.time()})
+async def _emit(job: _Job, event: str, data: dict) -> None:
+    job.seq += 1
+    payload = dict(data or {})
+    payload["seq"] = job.seq
+    await job.queue.put({"event": event, "data": payload, "ts": time.time()})
 
 
 async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], prompt: str) -> None:
-    q = job.queue
-    await _emit(q, "stage", {"stage": "upload_received"})
+    await _emit(job, "stage", {"stage": "upload_received"})
+    job.stage = "upload_received"
 
     client = _get_openai_client()
     data_url = _to_data_url(image_bytes, content_type)
     safe_prompt = (prompt or "").strip() or "请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"
 
-    await _emit(q, "stage", {"stage": "model_request_started"})
+    await _emit(job, "stage", {"stage": "model_request_started"})
+    job.stage = "model_request_started"
 
     text_acc = ""
     try:
@@ -96,7 +103,8 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
                 stream=True,
             )
 
-            await _emit(q, "stage", {"stage": "generating"})
+            await _emit(job, "stage", {"stage": "generating"})
+            job.stage = "generating"
             for chunk in stream:
                 if job.cancelled:
                     raise asyncio.CancelledError()
@@ -107,12 +115,16 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
                     delta = ""
                 if delta:
                     text_acc += delta
-                    await _emit(q, "delta", {"text": delta})
-            await _emit(q, "done", {"text": text_acc})
+                    job.text_acc = text_acc
+                    await _emit(job, "delta", {"text": delta})
+            job.text_acc = text_acc
+            job.stage = "done"
+            await _emit(job, "done", {"text": text_acc})
             return
         except Exception:
             # Fallback to non-streaming response (still returns stages, but no token deltas).
-            await _emit(q, "stage", {"stage": "generating"})
+            await _emit(job, "stage", {"stage": "generating"})
+            job.stage = "generating"
             response = client.chat.completions.create(
                 model=ARK_MODEL_NAME,
                 messages=[
@@ -127,15 +139,20 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
                 temperature=0.1,
             )
             text_acc = response.choices[0].message.content or ""
-            await _emit(q, "done", {"text": text_acc})
+            job.text_acc = text_acc
+            job.stage = "done"
+            await _emit(job, "done", {"text": text_acc})
             return
     except asyncio.CancelledError:
-        await _emit(q, "cancelled", {"message": "已取消"})
+        job.stage = "cancelled"
+        await _emit(job, "cancelled", {"message": "已取消"})
         return
     except Exception as e:
-        await _emit(q, "job_error", {"message": f"识图提取失败: {e}"})
+        job.stage = "job_error"
+        await _emit(job, "job_error", {"message": f"识图提取失败: {e}"})
         return
     finally:
+        job.text_acc = text_acc
         # allow SSE generator to finish, then cleanup
         await asyncio.sleep(0.1)
 
@@ -213,9 +230,10 @@ async def extract_text_start(
 
 
 @router.get("/extract-text/events/{job_id}")
-async def extract_text_events(job_id: str, request: Request):
+async def extract_text_events(job_id: str, request: Request, after: int = 0):
     """
     SSE 事件流：stage/delta/done/job_error/cancelled
+    after：可选，续传序号，大于 0 时先推送一次 snapshot
     """
     job = _JOBS.get(job_id)
     if not job:
@@ -223,6 +241,17 @@ async def extract_text_events(job_id: str, request: Request):
 
     async def gen():
         yield _sse("stage", {"stage": "connected"})
+        if after and job.seq >= after:
+            yield _sse(
+                "snapshot",
+                {
+                    "stage": job.stage,
+                    "text": job.text_acc,
+                    "seq": job.seq,
+                    "done": job.stage == "done",
+                    "cancelled": job.stage == "cancelled",
+                },
+            )
         while True:
             if await request.is_disconnected():
                 break
@@ -249,10 +278,11 @@ async def extract_text_cancel(job_id: str):
         return {"status": "success", "message": "任务不存在或已结束"}
 
     job.cancelled = True
+    job.stage = "cancelled"
     if job.task and not job.task.done():
         job.task.cancel()
     try:
-        await _emit(job.queue, "cancelled", {"message": "已取消"})
+        await _emit(job, "cancelled", {"message": "已取消"})
     except Exception:
         pass
     return {"status": "success", "message": "cancelled"}

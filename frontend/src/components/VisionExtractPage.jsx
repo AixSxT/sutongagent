@@ -258,7 +258,9 @@ const SUGGESTIONS = [
 ];
 
 const STORAGE_KEY = 'vision_extract_prompt_history_v1';
+const ACTIVE_JOB_KEY = 'vision_extract_active_job_v1';
 const MAX_HISTORY = 5;
+const MAX_HISTORY_RESULT_CHARS = 60000;
 
 export default function VisionExtractPage() {
   const fileInputRef = useRef(null);
@@ -290,6 +292,11 @@ export default function VisionExtractPage() {
   const [issueCursor, setIssueCursor] = useState(0);
   const tableWrapRef = useRef(null);
   const chatEndRef = useRef(null);
+  const chatWrapRef = useRef(null);
+  const hasInteractedRef = useRef(false);
+  const isFirstRenderRef = useRef(true);
+  const lastSeqRef = useRef(0);
+  const chatNearBottomRef = useRef(true);
 
   const fileName = useMemo(() => (file ? file.name : ''), [file]);
   const elapsedText = useMemo(() => {
@@ -298,13 +305,35 @@ export default function VisionExtractPage() {
     return `${sec.toFixed(1)}s`;
   }, [elapsedMs, startAtMs]);
 
-  useEffect(() => {
-    if (viewMode !== 'chat') return;
+  const scrollChatToBottom = (behavior = 'auto') => {
+    const el = chatWrapRef.current;
+    if (!el) return;
     try {
-      chatEndRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' });
+      el.scrollTo({ top: el.scrollHeight, behavior });
     } catch {
       // ignore
     }
+  };
+
+  const handleChatScroll = () => {
+    const el = chatWrapRef.current;
+    if (!el) return;
+    try {
+      chatNearBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    if (viewMode !== 'chat') return;
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
+    if (!hasInteractedRef.current && !isLoading) return;
+    if (isLoading && !chatNearBottomRef.current) return;
+    scrollChatToBottom('smooth');
   }, [chatMessages, viewMode, isLoading]);
 
   const stageLabel = useMemo(() => {
@@ -377,15 +406,193 @@ export default function VisionExtractPage() {
     );
   };
 
+  const saveActiveJob = (partial) => {
+    try {
+      const prevRaw = window.localStorage.getItem(ACTIVE_JOB_KEY);
+      const prev = prevRaw ? JSON.parse(prevRaw) : {};
+      const next = { ...prev, ...partial, updatedAt: Date.now() };
+      window.localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  const clearActiveJob = () => {
+    try {
+      window.localStorage.removeItem(ACTIVE_JOB_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
+  const loadActiveJob = () => {
+    try {
+      const raw = window.localStorage.getItem(ACTIVE_JOB_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setHistory(parsed.slice(0, MAX_HISTORY));
+      if (!Array.isArray(parsed)) return;
+      const next = parsed
+        .slice(0, MAX_HISTORY)
+        .map((h) => {
+          if (!h) return null;
+          if (typeof h === 'string') return { prompt: h, result: '', truncated: false, ts: Date.now() };
+          return {
+            prompt: String(h.prompt || ''),
+            result: typeof h.result === 'string' ? h.result : '',
+            truncated: Boolean(h.truncated),
+            ts: Number(h.ts) || Date.now(),
+          };
+        })
+        .filter(Boolean);
+      setHistory(next);
     } catch {
       // ignore
     }
+  }, []);
+
+  // 尝试恢复未完成任务
+  useEffect(() => {
+    const saved = loadActiveJob();
+    const jobId = saved?.jobId;
+    if (!jobId) return;
+    if (eventSourceRef.current || isLoading) return;
+
+    const savedStage = String(saved?.stage || '');
+    const savedText = typeof saved?.resultText === 'string' ? saved.resultText : '';
+    const savedPrompt = typeof saved?.prompt === 'string' ? saved.prompt : '';
+
+    if (savedPrompt) setPrompt(savedPrompt);
+    if (savedText) setResultText(savedText);
+    if (savedStage) setStage(savedStage);
+
+    if (savedStage === 'done' || savedStage === 'error' || savedStage === 'cancelled') return;
+
+    jobIdRef.current = String(jobId);
+    lastSeqRef.current = Number(saved?.lastSeq) || 0;
+    hasInteractedRef.current = true;
+    chatNearBottomRef.current = true;
+    setViewMode('chat');
+    setIsLoading(true);
+    upsertSystemStatus('Resuming...');
+
+    const es = new EventSource(visionApi.eventsUrl(jobIdRef.current, lastSeqRef.current));
+    eventSourceRef.current = es;
+
+    es.addEventListener('snapshot', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        const s = payload?.stage;
+        const t = payload?.text;
+        const seq = payload?.seq;
+        if (typeof t === 'string') setResultText(t);
+        if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+        if (s === 'model_request_started') setStage('model_request_started');
+        if (s === 'generating') setStage('generating');
+        if (s === 'done') setStage('done');
+        saveActiveJob({ jobId: jobIdRef.current, stage: s || '', lastSeq: lastSeqRef.current, resultText: typeof t === 'string' ? t : '' });
+      } catch {
+        // ignore
+      }
+    });
+
+    es.addEventListener('stage', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        const s = payload?.stage;
+        const seq = payload?.seq;
+        if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+        saveActiveJob({ jobId: jobIdRef.current, stage: s || '', lastSeq: lastSeqRef.current });
+        if (s === 'model_request_started') setStage('model_request_started');
+        if (s === 'generating') setStage('generating');
+      } catch {
+        // ignore
+      }
+    });
+
+    es.addEventListener('delta', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        const delta = payload?.text || '';
+        const seq = payload?.seq;
+        if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+        if (delta) {
+          setStage('generating');
+          setResultText((prev) => String(prev || '') + String(delta));
+          appendAssistantDelta(delta);
+          saveActiveJob({ jobId: jobIdRef.current, stage: 'generating', lastSeq: lastSeqRef.current });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    es.addEventListener('done', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        const text = payload?.text || '';
+        const seq = payload?.seq;
+        if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+        setResultText(text);
+        setStage('done');
+        pushHistory(savedPrompt || prompt, text);
+        saveActiveJob({ jobId: jobIdRef.current, stage: 'done', lastSeq: lastSeqRef.current, resultText: String(text || '') });
+      } catch {
+        // ignore
+      } finally {
+        closeStream();
+        resetActiveJob();
+        setIsLoading(false);
+        clearActiveJob();
+      }
+    });
+
+    es.addEventListener('cancelled', () => {
+      setStage('cancelled');
+      setErrorKind('cancel');
+      setError('已取消');
+      closeStream();
+      resetActiveJob();
+      setIsLoading(false);
+      clearActiveJob();
+    });
+
+    es.addEventListener('job_error', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        setStage('error');
+        setErrorKind('error');
+        setError(payload?.message || '识图提取失败');
+      } catch {
+        setStage('error');
+        setErrorKind('error');
+        setError('识图提取失败');
+      } finally {
+        closeStream();
+        resetActiveJob();
+        setIsLoading(false);
+        clearActiveJob();
+      }
+    });
+
+    es.onerror = () => {
+      setStage('error');
+      setErrorKind('error');
+      setError('连接中断，请重试');
+      closeStream();
+      resetActiveJob();
+      setIsLoading(false);
+      // 不清理 ACTIVE_JOB_KEY，方便再次尝试恢复
+    };
   }, []);
 
   useEffect(() => {
@@ -419,6 +626,8 @@ export default function VisionExtractPage() {
     }
     setFile(picked);
     setPreviewUrl(URL.createObjectURL(picked));
+    hasInteractedRef.current = true;
+    chatNearBottomRef.current = true;
     addChat('user', `已选择图片：${picked?.name || 'image'}`);
   };
 
@@ -431,10 +640,12 @@ export default function VisionExtractPage() {
     }
   };
 
-  const pushHistory = (text) => {
-    const value = String(text || '').trim();
+  const pushHistory = (promptText, resultTextSnapshot) => {
+    const value = String(promptText || '').trim();
     if (!value) return;
-    const entry = { prompt: value, ts: Date.now() };
+    const fullResult = String(resultTextSnapshot || '').trim();
+    const clipped = fullResult.length > MAX_HISTORY_RESULT_CHARS ? fullResult.slice(0, MAX_HISTORY_RESULT_CHARS) : fullResult;
+    const entry = { prompt: value, result: clipped, truncated: fullResult.length > MAX_HISTORY_RESULT_CHARS, ts: Date.now() };
     const next = [entry, ...history.filter((h) => h?.prompt !== value)].slice(0, MAX_HISTORY);
     saveHistory(next);
   };
@@ -475,6 +686,7 @@ export default function VisionExtractPage() {
     closeStream();
     resetActiveJob();
     setIsLoading(false);
+    clearActiveJob();
   };
 
   const onSubmit = async () => {
@@ -492,8 +704,12 @@ export default function VisionExtractPage() {
     setStage('uploading');
     setIsLoading(true);
     setViewMode('chat');
+    hasInteractedRef.current = true;
+    chatNearBottomRef.current = true;
+    lastSeqRef.current = 0;
     addChat('user', prompt);
     upsertSystemStatus('正在上传…');
+    saveActiveJob({ jobId: '', stage: 'uploading', prompt: String(prompt || ''), lastSeq: 0, resultText: '' });
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -527,14 +743,35 @@ export default function VisionExtractPage() {
       const jobId = data.job_id;
       jobIdRef.current = jobId;
       upsertSystemStatus('上传完成，等待识别…');
+      saveActiveJob({ jobId, stage: 'uploading', prompt: String(prompt || ''), lastSeq: lastSeqRef.current });
 
-      const es = new EventSource(visionApi.eventsUrl(jobId));
+      const es = new EventSource(visionApi.eventsUrl(jobId, lastSeqRef.current));
       eventSourceRef.current = es;
+
+      es.addEventListener('snapshot', (evt) => {
+        try {
+          const payload = JSON.parse(evt.data || '{}');
+          const s = payload?.stage;
+          const t = payload?.text;
+          const seq = payload?.seq;
+          if (typeof t === 'string') setResultText(t);
+          if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+          if (s === 'model_request_started') setStage('model_request_started');
+          if (s === 'generating') setStage('generating');
+          if (s === 'done') setStage('done');
+          saveActiveJob({ jobId, stage: s || '', lastSeq: lastSeqRef.current, resultText: typeof t === 'string' ? t : '' });
+        } catch {
+          // ignore
+        }
+      });
 
       es.addEventListener('stage', (evt) => {
         try {
           const payload = JSON.parse(evt.data || '{}');
           const s = payload?.stage;
+          const seq = payload?.seq;
+          if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
+          saveActiveJob({ jobId, stage: s || '', lastSeq: lastSeqRef.current });
           if (s === 'model_request_started') setStage('model_request_started');
           if (s === 'generating') setStage('generating');
           if (s === 'model_request_started') upsertSystemStatus('正在识别…');
@@ -548,10 +785,13 @@ export default function VisionExtractPage() {
         try {
           const payload = JSON.parse(evt.data || '{}');
           const delta = payload?.text || '';
+          const seq = payload?.seq;
+          if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
           if (delta) {
             setStage('generating');
             setResultText((prev) => String(prev || '') + String(delta));
             appendAssistantDelta(delta);
+            saveActiveJob({ jobId, stage: 'generating', lastSeq: lastSeqRef.current });
           }
         } catch {
           // ignore
@@ -562,9 +802,12 @@ export default function VisionExtractPage() {
         try {
           const payload = JSON.parse(evt.data || '{}');
           const text = payload?.text || '';
+          const seq = payload?.seq;
+          if (Number.isFinite(Number(seq))) lastSeqRef.current = Number(seq) || lastSeqRef.current;
           setResultText(text);
           setStage('done');
-          pushHistory(prompt);
+          pushHistory(prompt, text);
+          saveActiveJob({ jobId, stage: 'done', lastSeq: lastSeqRef.current, resultText: String(text || '') });
           if (assistantMsgIdRef.current) {
             const id = assistantMsgIdRef.current;
             setChatMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text, ts: Date.now() } : m)));
@@ -580,6 +823,7 @@ export default function VisionExtractPage() {
           closeStream();
           resetActiveJob();
           setIsLoading(false);
+          clearActiveJob();
         }
       });
 
@@ -620,6 +864,7 @@ export default function VisionExtractPage() {
         closeStream();
         resetActiveJob();
         setIsLoading(false);
+        clearActiveJob();
       };
     } catch (e) {
       const detail = e?.response?.data?.detail;
@@ -631,6 +876,7 @@ export default function VisionExtractPage() {
       closeStream();
       resetActiveJob();
       setIsLoading(false);
+      clearActiveJob();
     }
   };
 
@@ -904,6 +1150,12 @@ export default function VisionExtractPage() {
                   className="visionHistoryItem"
                   onClick={() => {
                     setPrompt(h.prompt || '');
+                    if (h?.result) {
+                      setResultText(String(h.result || ''));
+                      setViewMode('text');
+                      setError('');
+                      setErrorKind('error');
+                    }
                     promptRef.current?.focus();
                   }}
                   title={h.prompt}
@@ -1030,7 +1282,7 @@ export default function VisionExtractPage() {
           </div>
 
           {viewMode === 'chat' ? (
-            <div className="visionChatWrap">
+            <div className="visionChatWrap" ref={chatWrapRef} onScroll={handleChatScroll}>
               {chatMessages.map((m) => (
                 <div
                   key={m.id}

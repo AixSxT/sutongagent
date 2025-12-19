@@ -4036,6 +4036,16 @@ function App() {
             : currentView === 'vision'
                 ? '#f6f7fb'
                 : 'var(--ios-bg)';
+    const visionScrollRef = useRef(null);
+
+    useEffect(() => {
+        if (currentView !== 'vision') return;
+        try {
+            visionScrollRef.current?.scrollTo?.({ top: 0 });
+        } catch {
+            // ignore
+        }
+    }, [currentView]);
 
     return (
         <Layout className="app-container">
@@ -4173,12 +4183,19 @@ function App() {
                     </div>
                 )}
 
-                {/* Vision View */}
-                {currentView === 'vision' && (
-                    <div style={{ flex: 1, width: '100%', height: '100%', overflow: 'auto' }}>
-                        <VisionExtractPage />
-                    </div>
-                )}
+                {/* Vision View - keep mounted to preserve running tasks */}
+                <div
+                    ref={visionScrollRef}
+                    style={{
+                        flex: 1,
+                        width: '100%',
+                        height: '100%',
+                        overflow: 'auto',
+                        display: currentView === 'vision' ? 'block' : 'none',
+                    }}
+                >
+                    <VisionExtractPage />
+                </div>
 
                 {/* Tools View */}
                 {currentView === 'tools' && (
