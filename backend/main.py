@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from routers import excel, workflow, ai
+from routers import vision
 from database import init_db
 
 
@@ -36,6 +37,7 @@ app.add_middleware(
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])
 app.include_router(workflow.router, prefix="/api/workflow", tags=["Workflow"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
+app.include_router(vision.router, prefix="/api/vision", tags=["Vision"])
 
 
 @app.get("/")

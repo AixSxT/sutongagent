@@ -39,6 +39,7 @@ import 'reactflow/dist/style.css';
 import { excelApi, aiApi, workflowApi } from './services/api';
 import AIAssistantIsland from './components/AIAssistantIsland';
 import RaycastHomePage from './components/RaycastHomePage';
+import VisionExtractPage from './components/VisionExtractPage';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -4023,6 +4024,7 @@ function App() {
     const navItems = [
         { key: 'canvas', label: '画布', icon: <AppstoreOutlined /> },
         { key: 'search', label: '搜索', icon: <SearchOutlined /> },
+        { key: 'vision', label: '识图提取', icon: <EyeOutlined /> },
         { key: 'tools', label: '常用工具', icon: <ToolOutlined /> },
         { key: 'logistics', label: '物流', icon: <RocketOutlined /> },
     ];
@@ -4161,6 +4163,13 @@ function App() {
                 {currentView === 'search' && (
                     <div style={{ flex: 1, width: '100%', height: '100%', overflow: 'auto' }}>
                         <RaycastHomePage />
+                    </div>
+                )}
+
+                {/* Vision View */}
+                {currentView === 'vision' && (
+                    <div style={{ flex: 1, width: '100%', height: '100%', overflow: 'auto' }}>
+                        <VisionExtractPage />
                     </div>
                 )}
 

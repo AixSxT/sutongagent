@@ -179,4 +179,41 @@ export const workflowApi = {
     }
 };
 
+// Vision / 识图提取 API
+export const visionApi = {
+    extractText: async (file, prompt, options = {}) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('prompt', prompt || '');
+        const response = await api.post('/vision/extract-text', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            signal: options.signal,
+            onUploadProgress: options.onUploadProgress
+        });
+        return response.data;
+    },
+
+    startExtractText: async (file, prompt, options = {}) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('prompt', prompt || '');
+        const response = await api.post('/vision/extract-text/start', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            signal: options.signal,
+            onUploadProgress: options.onUploadProgress
+        });
+        return response.data;
+    },
+
+    cancelExtractText: async (jobId) => {
+        if (!jobId) return { status: 'success' };
+        const response = await api.post(`/vision/extract-text/cancel/${encodeURIComponent(jobId)}`);
+        return response.data;
+    },
+
+    eventsUrl: (jobId) => {
+        return `/api/vision/extract-text/events/${encodeURIComponent(jobId)}`;
+    }
+};
+
 export default api;

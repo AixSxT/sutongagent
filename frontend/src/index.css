@@ -9,7 +9,7 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
 
   /* 全局悬浮导航占位（供子页面对齐使用） */
-  --global-nav-offset: 100px;
+  --global-nav-offset: 0px;
   --global-nav-height: 52px;
 }
 
@@ -991,7 +991,7 @@ body {
 .app-header {
   /* 悬浮定位 */
   position: fixed !important;
-  top: 10px;
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;

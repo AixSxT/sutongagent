@@ -1,0 +1,258 @@
+"""
+Vision API - 识图提取（多模态大模型）
+"""
+
+import asyncio
+import base64
+import json
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
+
+from config import ARK_API_KEY, ARK_BASE_URL, ARK_MODEL_NAME
+
+router = APIRouter()
+
+
+def _to_data_url(image_bytes: bytes, content_type: Optional[str]) -> str:
+    mime = (content_type or "").strip() or "image/jpeg"
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _sse(event: str, data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+@dataclass
+class _Job:
+    id: str
+    created_at: float
+    queue: "asyncio.Queue[dict]"
+    task: Optional[asyncio.Task]
+    cancelled: bool = False
+
+
+_JOBS: dict[str, _Job] = {}
+
+
+def _require_key() -> None:
+    if not ARK_API_KEY:
+        raise HTTPException(status_code=500, detail="ARK_API_KEY 未配置")
+
+
+def _validate_image_upload(file: UploadFile, image_bytes: bytes) -> None:
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="仅支持上传图片文件")
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="图片为空")
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片过大（请小于 8MB）")
+
+
+def _get_openai_client():
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"缺少 openai 依赖: {e}")
+    return OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL, timeout=60.0)
+
+
+async def _emit(q: "asyncio.Queue[dict]", event: str, data: dict) -> None:
+    await q.put({"event": event, "data": data, "ts": time.time()})
+
+
+async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], prompt: str) -> None:
+    q = job.queue
+    await _emit(q, "stage", {"stage": "upload_received"})
+
+    client = _get_openai_client()
+    data_url = _to_data_url(image_bytes, content_type)
+    safe_prompt = (prompt or "").strip() or "请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"
+
+    await _emit(q, "stage", {"stage": "model_request_started"})
+
+    text_acc = ""
+    try:
+        # Prefer real token streaming if available.
+        try:
+            stream = client.chat.completions.create(
+                model=ARK_MODEL_NAME,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                            {"type": "text", "text": safe_prompt},
+                        ],
+                    }
+                ],
+                temperature=0.1,
+                stream=True,
+            )
+
+            await _emit(q, "stage", {"stage": "generating"})
+            for chunk in stream:
+                if job.cancelled:
+                    raise asyncio.CancelledError()
+                delta = ""
+                try:
+                    delta = chunk.choices[0].delta.content or ""
+                except Exception:
+                    delta = ""
+                if delta:
+                    text_acc += delta
+                    await _emit(q, "delta", {"text": delta})
+            await _emit(q, "done", {"text": text_acc})
+            return
+        except Exception:
+            # Fallback to non-streaming response (still returns stages, but no token deltas).
+            await _emit(q, "stage", {"stage": "generating"})
+            response = client.chat.completions.create(
+                model=ARK_MODEL_NAME,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                            {"type": "text", "text": safe_prompt},
+                        ],
+                    }
+                ],
+                temperature=0.1,
+            )
+            text_acc = response.choices[0].message.content or ""
+            await _emit(q, "done", {"text": text_acc})
+            return
+    except asyncio.CancelledError:
+        await _emit(q, "cancelled", {"message": "已取消"})
+        return
+    except Exception as e:
+        await _emit(q, "job_error", {"message": f"识图提取失败: {e}"})
+        return
+    finally:
+        # allow SSE generator to finish, then cleanup
+        await asyncio.sleep(0.1)
+
+
+def _cleanup_job_later(job_id: str, delay_s: float = 120.0) -> None:
+    async def _cleanup():
+        await asyncio.sleep(delay_s)
+        _JOBS.pop(job_id, None)
+
+    try:
+        asyncio.create_task(_cleanup())
+    except Exception:
+        _JOBS.pop(job_id, None)
+
+
+# -------------------------
+# Legacy endpoint (kept)
+# -------------------------
+@router.post("/extract-text")
+async def extract_text(file: UploadFile = File(...), prompt: str = Form("请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。")):
+    """
+    兼容旧版调用：一次性返回结果（无真实进度）
+    """
+    _require_key()
+    image_bytes = await file.read()
+    _validate_image_upload(file, image_bytes)
+
+    client = _get_openai_client()
+    data_url = _to_data_url(image_bytes, file.content_type)
+    safe_prompt = (prompt or "").strip() or "请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"
+
+    try:
+        response = client.chat.completions.create(
+            model=ARK_MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": safe_prompt},
+                    ],
+                }
+            ],
+            temperature=0.1,
+        )
+        text = response.choices[0].message.content or ""
+        return {"status": "success", "text": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"识图提取失败: {e}")
+
+
+# -------------------------
+# Job + SSE endpoints
+# -------------------------
+@router.post("/extract-text/start")
+async def extract_text_start(
+    file: UploadFile = File(...),
+    prompt: str = Form("请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"),
+):
+    """
+    启动识图任务，返回 job_id；前端可用 SSE 订阅真实阶段与流式输出。
+    """
+    _require_key()
+    image_bytes = await file.read()
+    _validate_image_upload(file, image_bytes)
+
+    job_id = uuid.uuid4().hex[:10]
+    q: "asyncio.Queue[dict]" = asyncio.Queue()
+    job = _Job(id=job_id, created_at=time.time(), queue=q, task=None)
+    _JOBS[job_id] = job
+
+    job.task = asyncio.create_task(_run_job(job, image_bytes, file.content_type, prompt))
+    _cleanup_job_later(job_id)
+    return {"status": "success", "job_id": job_id}
+
+
+@router.get("/extract-text/events/{job_id}")
+async def extract_text_events(job_id: str, request: Request):
+    """
+    SSE 事件流：stage/delta/done/job_error/cancelled
+    """
+    job = _JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+
+    async def gen():
+        yield _sse("stage", {"stage": "connected"})
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                item = await asyncio.wait_for(job.queue.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                yield _sse("ping", {"ts": time.time()})
+                continue
+
+            event = item.get("event", "message")
+            data = item.get("data", {})
+            yield _sse(event, data)
+
+            if event in {"done", "job_error", "cancelled"}:
+                break
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/extract-text/cancel/{job_id}")
+async def extract_text_cancel(job_id: str):
+    job = _JOBS.get(job_id)
+    if not job:
+        return {"status": "success", "message": "任务不存在或已结束"}
+
+    job.cancelled = True
+    if job.task and not job.task.done():
+        job.task.cancel()
+    try:
+        await _emit(job.queue, "cancelled", {"message": "已取消"})
+    except Exception:
+        pass
+    return {"status": "success", "message": "cancelled"}

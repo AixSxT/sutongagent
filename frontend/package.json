@@ -15,7 +15,8 @@
         "antd": "^5.12.2",
         "@ant-design/icons": "^5.2.6",
         "axios": "^1.6.2",
-        "dayjs": "^1.11.10"
+        "dayjs": "^1.11.10",
+        "xlsx": "^0.18.5"
     },
     "devDependencies": {
         "@types/react": "^18.2.43",
