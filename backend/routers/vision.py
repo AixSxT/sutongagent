@@ -14,6 +14,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from config import ARK_API_KEY, ARK_BASE_URL, ARK_MODEL_NAME
+from openai import AsyncOpenAI  # type: ignore
 
 router = APIRouter()
 
@@ -60,10 +61,9 @@ def _validate_image_upload(file: UploadFile, image_bytes: bytes) -> None:
 
 def _get_openai_client():
     try:
-        from openai import OpenAI  # type: ignore
+        return AsyncOpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL, timeout=60.0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"缺少 openai 依赖: {e}")
-    return OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL, timeout=60.0)
 
 
 async def _emit(job: _Job, event: str, data: dict) -> None:
@@ -88,7 +88,7 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
     try:
         # Prefer real token streaming if available.
         try:
-            stream = client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=ARK_MODEL_NAME,
                 messages=[
                     {
@@ -105,7 +105,7 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
 
             await _emit(job, "stage", {"stage": "generating"})
             job.stage = "generating"
-            for chunk in stream:
+            async for chunk in stream:
                 if job.cancelled:
                     raise asyncio.CancelledError()
                 delta = ""
@@ -125,7 +125,7 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
             # Fallback to non-streaming response (still returns stages, but no token deltas).
             await _emit(job, "stage", {"stage": "generating"})
             job.stage = "generating"
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=ARK_MODEL_NAME,
                 messages=[
                     {
@@ -137,6 +137,7 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
                     }
                 ],
                 temperature=0.1,
+                stream=False,
             )
             text_acc = response.choices[0].message.content or ""
             job.text_acc = text_acc
@@ -157,9 +158,12 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
         await asyncio.sleep(0.1)
 
 
-def _cleanup_job_later(job_id: str, delay_s: float = 120.0) -> None:
+def _cleanup_job_later(job_id: str, delay_s: float = 1800.0) -> None:
     async def _cleanup():
         await asyncio.sleep(delay_s)
+        job = _JOBS.get(job_id)
+        if job and job.stage not in {"done", "job_error", "cancelled"}:
+            return
         _JOBS.pop(job_id, None)
 
     try:

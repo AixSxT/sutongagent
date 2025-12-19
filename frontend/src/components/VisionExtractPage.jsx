@@ -42,7 +42,7 @@ function isLikelyNumber(s) {
   const v = String(s ?? '').trim();
   if (!v) return false;
   // allow integers/decimals and common OCR separators
-  const cleaned = v.replace(/[,，]/g, '').replace(/\s+/g, '');
+  const cleaned = v.replace(/[,\uFF0C]/g, '').replace(/\s+/g, '');
   return /^-?\d+(\.\d+)?$/.test(cleaned);
 }
 
