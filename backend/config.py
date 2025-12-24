@@ -6,15 +6,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from repo root so env vars are available at import time.
 BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # 豆包AI配置
-# ⚠️ 不要在代码仓库中硬编码真实 Key，请通过环境变量 ARK_API_KEY 注入。
-ARK_API_KEY = os.getenv("ARK_API_KEY")
+
+ARK_API_KEY = os.getenv("ARK_API_KEY") or os.getenv("OPENAI_API_KEY")
 ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 ARK_MODEL_NAME = os.getenv("ARK_MODEL_NAME", "doubao-seed-1-6-251015")
+if not ARK_API_KEY:
+    raise ValueError("ARK_API_KEY is not set. Please set it in environment or .env.")
 
 # 文件存储配置
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
