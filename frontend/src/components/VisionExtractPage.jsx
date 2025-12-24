@@ -270,8 +270,21 @@ export default function VisionExtractPage() {
   const eventSourceRef = useRef(null);
   const statusMsgIdRef = useRef('');
   const assistantMsgIdRef = useRef('');
+  const pendingFilesRef = useRef([]);
+  const batchTotalRef = useRef(0);
+  const batchCancelRef = useRef(false);
+  const startNextJobRef = useRef(null);
+  const activeItemRef = useRef(null);
+  const cancelModeRef = useRef('none');
+  const processedCountRef = useRef(0);
 
   const [file, setFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [batchIndex, setBatchIndex] = useState(0);
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchActiveName, setBatchActiveName] = useState('');
+  const [activeItemId, setActiveItemId] = useState('');
+  const [isQueueDragActive, setIsQueueDragActive] = useState(false);
   const [previewUrl, setPreviewUrl] = useState('');
   const [prompt, setPrompt] = useState('请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。');
   const [isLoading, setIsLoading] = useState(false);
@@ -298,7 +311,11 @@ export default function VisionExtractPage() {
   const lastSeqRef = useRef(0);
   const chatNearBottomRef = useRef(true);
 
-  const fileName = useMemo(() => (file ? file.name : ''), [file]);
+  const fileName = useMemo(() => {
+    if (selectedFiles.length > 1) return `${selectedFiles.length} 张图片`;
+    if (selectedFiles.length === 1) return selectedFiles[0]?.file?.name || '';
+    return file ? file.name : '';
+  }, [file, selectedFiles]);
   const elapsedText = useMemo(() => {
     if (!startAtMs) return '';
     const sec = Math.max(0, elapsedMs) / 1000;
@@ -337,15 +354,19 @@ export default function VisionExtractPage() {
   }, [chatMessages, viewMode, isLoading]);
 
   const stageLabel = useMemo(() => {
+    const showBatch = batchTotal > 1;
+    const batchInfo = showBatch ? `（${batchIndex}/${batchTotal}）` : '';
+    const batchName = showBatch && batchActiveName ? ` ${batchActiveName}` : '';
+    const suffix = `${batchInfo}${batchName}`;
     if (!isLoading && stage === 'idle') return '';
-    if (stage === 'uploading') return uploadPct ? `正在上传… ${uploadPct}%` : '正在上传…';
-    if (stage === 'model_request_started') return '正在识别…';
-    if (stage === 'generating') return '正在生成结果…';
+    if (stage === 'uploading') return uploadPct ? `正在上传… ${uploadPct}%${suffix}` : `正在上传…${suffix}`;
+    if (stage === 'model_request_started') return `正在识别…${suffix}`;
+    if (stage === 'generating') return `正在生成结果…${suffix}`;
     if (stage === 'cancelled') return '已取消';
     if (stage === 'error') return '识图失败';
     if (stage === 'done') return '已完成';
     return '处理中…';
-  }, [isLoading, stage, uploadPct]);
+  }, [batchActiveName, batchIndex, batchTotal, isLoading, stage, uploadPct]);
 
   const structured = useMemo(() => {
     if (isLoading) return { ok: false, reason: 'loading' };
@@ -596,15 +617,28 @@ export default function VisionExtractPage() {
   }, []);
 
   useEffect(() => {
+    const url = previewUrl;
+    const queueUrls = selectedFiles.map((item) => item?.url).filter(Boolean);
     return () => {
-      if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl);
+      if (!url || !url.startsWith('blob:')) return;
+      if (queueUrls.includes(url)) return;
+      URL.revokeObjectURL(url);
     };
-  }, [previewUrl]);
+  }, [previewUrl, selectedFiles]);
 
   useEffect(() => {
     if (!isLoading) {
       setElapsedMs(0);
       setStartAtMs(0);
+      setBatchIndex(0);
+      setBatchTotal(0);
+      setBatchActiveName('');
+      setActiveItemId('');
+      pendingFilesRef.current = [];
+      batchTotalRef.current = 0;
+      batchCancelRef.current = false;
+      processedCountRef.current = 0;
+      activeItemRef.current = null;
       return;
     }
     const started = Date.now();
@@ -615,64 +649,89 @@ export default function VisionExtractPage() {
   }, [isLoading]);
 
   const triggerPick = () => fileInputRef.current?.click();
+  const handleQueueDragOver = (event) => {
+    event.preventDefault();
+    setIsQueueDragActive(true);
+  };
+  const handleQueueDragLeave = () => {
+    setIsQueueDragActive(false);
+  };
+  const handleQueueDrop = (event) => {
+    event.preventDefault();
+    setIsQueueDragActive(false);
+    const files = event?.dataTransfer?.files;
+    if (files && files.length > 0) handleFile(files);
+  };
 
-  const handleFile = (picked) => {
-    setError('');
-    setResultText('');
-    if (!picked) return;
-    if (!picked.type?.startsWith('image/')) {
-      setError('请选择图片文件（jpg/png/webp 等）');
-      return;
+  const isPdfFile = (pickedFile) => {
+    const type = String(pickedFile?.type || '').toLowerCase();
+    if (type === 'application/pdf') return true;
+    const name = String(pickedFile?.name || '').toLowerCase();
+    return name.endsWith('.pdf');
+  };
+
+  const isImageFile = (pickedFile) => String(pickedFile?.type || '').toLowerCase().startsWith('image/');
+
+  const makeQueueItem = (picked) => {
+    const fileObj = picked instanceof File ? picked : null;
+    if (!fileObj) return null;
+    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return {
+      id,
+      file: fileObj,
+      url: URL.createObjectURL(fileObj),
+      isPdf: isPdfFile(fileObj)
+    };
+  };
+
+  const appendQueueItems = (items) => {
+    if (!items.length) return;
+    setSelectedFiles((prev) => [...prev, ...items]);
+    if (!file && items[0]) {
+      setFile(items[0].file);
+      setPreviewUrl(items[0].url);
     }
-    setFile(picked);
-    setPreviewUrl(URL.createObjectURL(picked));
-    hasInteractedRef.current = true;
-    chatNearBottomRef.current = true;
-    addChat('user', `已选择图片：${picked?.name || 'image'}`);
-  };
-
-  const saveHistory = (next) => {
-    setHistory(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
+    if (isLoading) {
+      pendingFilesRef.current = [...pendingFilesRef.current, ...items];
+      batchTotalRef.current += items.length;
+      setBatchTotal(batchTotalRef.current);
     }
   };
 
-  const pushHistory = (promptText, resultTextSnapshot) => {
-    const value = String(promptText || '').trim();
-    if (!value) return;
-    const fullResult = String(resultTextSnapshot || '').trim();
-    const clipped = fullResult.length > MAX_HISTORY_RESULT_CHARS ? fullResult.slice(0, MAX_HISTORY_RESULT_CHARS) : fullResult;
-    const entry = { prompt: value, result: clipped, truncated: fullResult.length > MAX_HISTORY_RESULT_CHARS, ts: Date.now() };
-    const next = [entry, ...history.filter((h) => h?.prompt !== value)].slice(0, MAX_HISTORY);
-    saveHistory(next);
-  };
-
-  const closeStream = () => {
-    try {
-      eventSourceRef.current?.close?.();
-    } catch {
-      // ignore
+  const clearQueue = () => {
+    setSelectedFiles((prev) => {
+      prev.forEach((item) => {
+        if (item?.url?.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(item.url);
+          } catch {
+            // ignore
+          }
+        }
+      });
+      return [];
+    });
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(previewUrl);
+      } catch {
+        // ignore
+      }
     }
-    eventSourceRef.current = null;
+    setFile(null);
+    setPreviewUrl('');
+    setBatchIndex(0);
+    setBatchTotal(0);
+    setBatchActiveName('');
+    setActiveItemId('');
+    activeItemRef.current = null;
+    pendingFilesRef.current = [];
+    batchTotalRef.current = 0;
+    processedCountRef.current = 0;
   };
 
-  const resetActiveJob = () => {
-    jobIdRef.current = '';
-    abortRef.current = null;
-    closeStream();
-    statusMsgIdRef.current = '';
-    assistantMsgIdRef.current = '';
-  };
-
-  const handleCancel = async () => {
-    if (!isLoading) return;
-    setStage('cancelled');
-    setErrorKind('cancel');
-    setError('已取消');
-    addChat('system', '已取消本次识图。');
+  const cancelCurrentJob = async (mode = 'skip') => {
+    cancelModeRef.current = mode;
     try {
       abortRef.current?.abort?.();
     } catch {
@@ -683,31 +742,115 @@ export default function VisionExtractPage() {
     } catch {
       // ignore
     }
-    closeStream();
-    resetActiveJob();
-    setIsLoading(false);
-    clearActiveJob();
+    if (!jobIdRef.current && mode === 'skip') {
+      startNextJobRef.current?.();
+    }
   };
 
-  const onSubmit = async () => {
+  const removeQueueItem = (itemId) => {
+    const current = activeItemRef.current;
+    const isCurrent = current && current.id === itemId;
+    if (isCurrent) {
+      setActiveItemId('');
+      activeItemRef.current = null;
+      cancelCurrentJob('skip');
+    } else {
+      pendingFilesRef.current = pendingFilesRef.current.filter((item) => item?.id !== itemId);
+    }
+    if (isLoading && batchTotalRef.current > 0) {
+      batchTotalRef.current = Math.max(0, batchTotalRef.current - 1);
+      setBatchTotal(batchTotalRef.current);
+    }
+    setSelectedFiles((prev) => {
+      const next = [];
+      for (const item of prev) {
+        if (item?.id === itemId) {
+          if (item?.url?.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(item.url);
+            } catch {
+              // ignore
+            }
+          }
+          continue;
+        }
+        next.push(item);
+      }
+      if (next.length === 0) {
+        setFile(null);
+        setPreviewUrl('');
+      }
+      return next;
+    });
+  };
+
+  const handleFile = (picked) => {
+    setError('');
+    setResultText('');
+    if (!picked) return;
+    const list = Array.isArray(picked)
+      ? picked
+      : picked instanceof FileList
+        ? Array.from(picked)
+        : [picked];
+    const images = list.filter((item) => isImageFile(item) || isPdfFile(item));
+    if (images.length === 0) {
+      setError('请选择图片文件（jpg/png/webp 等）');
+      return;
+    }
+    const items = images.map(makeQueueItem).filter(Boolean);
+    appendQueueItems(items);
+    hasInteractedRef.current = true;
+    chatNearBottomRef.current = true;
+    if (images.length === 1) {
+      addChat('user', `已选择图片：${images[0]?.name || 'image'}`);
+    } else {
+      addChat('user', `已选择 ${images.length} 张图片`);
+    }
+    if (images.length !== list.length) {
+      addChat('system', '已过滤非图片文件');
+    }
+  };
+
+  const startNextJob = () => {
+    if (batchCancelRef.current) return;
+    const nextItem = pendingFilesRef.current.shift();
+    if (!nextItem) {
+      setIsLoading(false);
+      if (batchTotalRef.current > 0) clearQueue();
+      return;
+    }
+    const total = batchTotalRef.current || 1;
+    const index = Math.min(total, processedCountRef.current + 1);
+    setBatchIndex(index);
+    setBatchTotal(total);
+    setBatchActiveName(nextItem?.file?.name || `图片${index}`);
+    setActiveItemId(nextItem?.id || '');
+    activeItemRef.current = nextItem;
+    setFile(nextItem?.file || null);
+    if (nextItem?.url) setPreviewUrl(nextItem.url);
+    startSingleJob(nextItem, index, total);
+  };
+
+  startNextJobRef.current = startNextJob;
+
+  const startSingleJob = async (pickedItem, index, total) => {
+    resetActiveJob();
     setError('');
     setErrorKind('error');
     setResultText('');
-    if (!file) {
-      setError('请先上传一张图片');
-      return;
-    }
-    if (isLoading) return;
-
-    resetActiveJob();
     setUploadPct(0);
     setStage('uploading');
-    setIsLoading(true);
     setViewMode('chat');
     hasInteractedRef.current = true;
     chatNearBottomRef.current = true;
     lastSeqRef.current = 0;
-    addChat('user', prompt);
+
+    const displayName = pickedItem?.file?.name || `图片${index}`;
+    const pickedFile = pickedItem?.file;
+    if (total > 1) {
+      addChat('system', `开始识别（${index}/${total}）：${displayName}`);
+    }
     upsertSystemStatus('正在上传…');
     saveActiveJob({ jobId: '', stage: 'uploading', prompt: String(prompt || ''), lastSeq: 0, resultText: '' });
 
@@ -715,14 +858,14 @@ export default function VisionExtractPage() {
     abortRef.current = controller;
 
     try {
-      const data = await visionApi.startExtractText(file, prompt, {
+      const data = await visionApi.startExtractText(pickedFile, prompt, {
         signal: controller.signal,
         onUploadProgress: (evt) => {
           try {
-            const total = evt?.total || 0;
+            const totalBytes = evt?.total || 0;
             const loaded = evt?.loaded || 0;
-            if (total > 0) {
-              const pct = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+            if (totalBytes > 0) {
+              const pct = Math.max(0, Math.min(100, Math.round((loaded / totalBytes) * 100)));
               setUploadPct(pct);
               upsertSystemStatus(pct ? `正在上传… ${pct}%` : '正在上传…');
             }
@@ -736,6 +879,9 @@ export default function VisionExtractPage() {
         setStage('error');
         setError(data?.detail || data?.message || '识图启动失败');
         addChat('system', data?.detail || data?.message || '识图启动失败');
+        pendingFilesRef.current = [];
+        resetActiveJob();
+        clearActiveJob();
         setIsLoading(false);
         return;
       }
@@ -747,6 +893,29 @@ export default function VisionExtractPage() {
 
       const es = new EventSource(visionApi.eventsUrl(jobId, lastSeqRef.current));
       eventSourceRef.current = es;
+
+      const finalizeJob = (shouldContinue) => {
+        closeStream();
+        resetActiveJob();
+        clearActiveJob();
+        activeItemRef.current = null;
+        cancelModeRef.current = 'none';
+        if (shouldContinue) {
+          processedCountRef.current += 1;
+        }
+        if (shouldContinue && pendingFilesRef.current.length > 0 && !batchCancelRef.current) {
+          startNextJobRef.current?.();
+          return;
+        }
+        if (shouldContinue && pendingFilesRef.current.length === 0) {
+          setIsLoading(false);
+          if (batchTotalRef.current > 0) clearQueue();
+          return;
+        }
+        pendingFilesRef.current = [];
+        setActiveItemId('');
+        setIsLoading(false);
+      };
 
       es.addEventListener('snapshot', (evt) => {
         try {
@@ -820,21 +989,25 @@ export default function VisionExtractPage() {
         } catch {
           // ignore
         } finally {
-          closeStream();
-          resetActiveJob();
-          setIsLoading(false);
-          clearActiveJob();
+          finalizeJob(true);
         }
       });
 
       es.addEventListener('cancelled', () => {
+        const mode = cancelModeRef.current;
+        const isSkip = mode === 'skip';
         setStage('cancelled');
         setErrorKind('cancel');
+        if (isSkip) {
+          setError('已跳过当前图片');
+          addChat('system', `已跳过：${displayName}`);
+          finalizeJob(true);
+          return;
+        }
         setError('已取消');
         addChat('system', '已取消本次识图。');
-        closeStream();
-        resetActiveJob();
-        setIsLoading(false);
+        pendingFilesRef.current = [];
+        finalizeJob(false);
       });
 
       es.addEventListener('job_error', (evt) => {
@@ -850,9 +1023,8 @@ export default function VisionExtractPage() {
           setError('识图提取失败');
           addChat('system', '识图提取失败');
         } finally {
-          closeStream();
-          resetActiveJob();
-          setIsLoading(false);
+          pendingFilesRef.current = [];
+          finalizeJob(false);
         }
       });
 
@@ -861,10 +1033,8 @@ export default function VisionExtractPage() {
         setErrorKind('error');
         setError('连接中断，请重试');
         addChat('system', '连接中断，请重试');
-        closeStream();
-        resetActiveJob();
-        setIsLoading(false);
-        clearActiveJob();
+        pendingFilesRef.current = [];
+        finalizeJob(false);
       };
     } catch (e) {
       const detail = e?.response?.data?.detail;
@@ -873,11 +1043,110 @@ export default function VisionExtractPage() {
       setErrorKind('error');
       setError(msg);
       addChat('system', msg);
+      pendingFilesRef.current = [];
       closeStream();
       resetActiveJob();
       setIsLoading(false);
       clearActiveJob();
     }
+  };
+
+  const saveHistory = (next) => {
+    setHistory(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  const pushHistory = (promptText, resultTextSnapshot) => {
+    const value = String(promptText || '').trim();
+    if (!value) return;
+    const fullResult = String(resultTextSnapshot || '').trim();
+    const clipped = fullResult.length > MAX_HISTORY_RESULT_CHARS ? fullResult.slice(0, MAX_HISTORY_RESULT_CHARS) : fullResult;
+    const entry = { prompt: value, result: clipped, truncated: fullResult.length > MAX_HISTORY_RESULT_CHARS, ts: Date.now() };
+    const next = [entry, ...history.filter((h) => h?.prompt !== value)].slice(0, MAX_HISTORY);
+    saveHistory(next);
+  };
+
+  const closeStream = () => {
+    try {
+      eventSourceRef.current?.close?.();
+    } catch {
+      // ignore
+    }
+    eventSourceRef.current = null;
+  };
+
+  const resetActiveJob = () => {
+    jobIdRef.current = '';
+    abortRef.current = null;
+    closeStream();
+    statusMsgIdRef.current = '';
+    assistantMsgIdRef.current = '';
+  };
+
+  const handleCancel = async () => {
+    if (!isLoading) return;
+    cancelModeRef.current = 'stop';
+    batchCancelRef.current = true;
+    pendingFilesRef.current = [];
+    setBatchActiveName('');
+    setStage('cancelled');
+    setErrorKind('cancel');
+    setError('已取消');
+    addChat('system', '已取消本次识图。');
+    try {
+      abortRef.current?.abort?.();
+    } catch {
+      // ignore
+    }
+    try {
+      if (jobIdRef.current) await visionApi.cancelExtractText(jobIdRef.current);
+    } catch {
+      // ignore
+    }
+    closeStream();
+    resetActiveJob();
+    setIsLoading(false);
+    clearActiveJob();
+  };
+
+  const onSubmit = async () => {
+    setError('');
+    setErrorKind('error');
+    setResultText('');
+    if (isLoading) return;
+    const filesToProcess = selectedFiles.length > 0
+      ? selectedFiles
+      : (file ? [{ id: 'single', file, url: previewUrl || '' }] : []);
+    if (filesToProcess.length === 0) {
+      setError('请先上传一张图片');
+      return;
+    }
+
+    batchCancelRef.current = false;
+    pendingFilesRef.current = [...filesToProcess];
+    batchTotalRef.current = filesToProcess.length;
+    processedCountRef.current = 0;
+    setBatchTotal(filesToProcess.length);
+    setBatchIndex(0);
+    setBatchActiveName('');
+
+    setUploadPct(0);
+    setStage('uploading');
+    setIsLoading(true);
+    setViewMode('chat');
+    hasInteractedRef.current = true;
+    chatNearBottomRef.current = true;
+    lastSeqRef.current = 0;
+    addChat('user', prompt);
+    if (filesToProcess.length > 1) {
+      addChat('system', `已选择 ${filesToProcess.length} 张图片，将按顺序识别。`);
+    }
+
+    startNextJobRef.current?.();
   };
 
   const exportExcel = async () => {
@@ -993,7 +1262,75 @@ export default function VisionExtractPage() {
 
   return (
     <div className="visionRoot">
-      <div className="visionContainer">
+      <div className="visionLayout">
+        <aside className="visionSidebar">
+          <div className="visionSidebarCard">
+            <div className="visionSidebarHeader">
+              <div className="visionSidebarTitle">图片队列</div>
+              <div className="visionSidebarActions">
+                <button type="button" className="visionQueueBtn" onClick={triggerPick}>
+                  添加
+                </button>
+                <button
+                  type="button"
+                  className="visionQueueBtn ghost"
+                  onClick={clearQueue}
+                  disabled={isLoading || selectedFiles.length === 0}
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={isQueueDragActive ? 'visionDropZone visionDropZoneActive' : 'visionDropZone'}
+              onDragOver={handleQueueDragOver}
+              onDragLeave={handleQueueDragLeave}
+              onDrop={handleQueueDrop}
+            >
+              <div className="visionDropTitle">拖拽图片到此处</div>
+              <div className="visionDropHint">支持多张，自动排队识别</div>
+            </div>
+
+            <div className="visionQueueList">
+              {selectedFiles.length === 0 ? (
+                <div className="visionQueueEmpty">暂无图片，点击“添加”或拖拽上传</div>
+              ) : (
+                selectedFiles.map((item) => {
+                  const isActive = activeItemId && item?.id === activeItemId;
+                  const statusText = isActive
+                    ? '处理中'
+                    : isLoading
+                      ? '排队中'
+                      : '待处理';
+                  return (
+                    <div key={item.id} className={isActive ? 'visionQueueItem active' : 'visionQueueItem'}>
+                      {item?.isPdf ? (
+                        <div className="visionQueueThumb visionQueueThumbPdf">PDF</div>
+                      ) : (
+                        <img className="visionQueueThumb" src={item.url} alt={item.file?.name || 'image'} />
+                      )}
+                      <div className="visionQueueMeta">
+                        <div className="visionQueueName">{item.file?.name || '未命名图片'}</div>
+                        <div className="visionQueueStatus">{statusText}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="visionQueueRemove"
+                        onClick={() => removeQueueItem(item.id)}
+                        title={isActive ? '取消当前' : '移除'}
+                      >
+                        {isActive ? '取消' : '移除'}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </aside>
+
+        <div className="visionContainer">
         <header className="visionHeader">
           <h1 className="rc-hero-title">
             识图提取 <br />
@@ -1079,9 +1416,10 @@ export default function VisionExtractPage() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf"
+            multiple
             style={{ display: 'none' }}
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => handleFile(e.target.files)}
           />
         </div>
 
@@ -1198,7 +1536,7 @@ export default function VisionExtractPage() {
               ))}
             </div>
           ) : null}
-          <div className="visionFaq">文字小请裁剪 · 图片模糊会降准 · 一次只传一张</div>
+          <div className="visionFaq">文字小请裁剪 · 图片模糊会降准 · 多张会按顺序识别</div>
         </section>
 
         <section className="visionResult">
@@ -1416,6 +1754,7 @@ export default function VisionExtractPage() {
           <div className="visionResultFoot">接口：POST /api/vision/extract-text</div>
         </section>
       </div>
+    </div>
     </div>
   );
 }

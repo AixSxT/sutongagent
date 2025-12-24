@@ -1161,12 +1161,51 @@ class WorkflowEngine:
                 break
         if not file_path:
             raise FileNotFoundError(f"找不到文件: {file_id}")
+        logger.info("[ProfitTable] file_id=%s mapped_id=%s file_path=%s", file_id, mapped_id, file_path)
 
         def _read_sheet(sheet_name: str, limit: Optional[int] = None) -> pd.DataFrame:
             try:
-                return pd.read_excel(file_path, sheet_name=sheet_name, nrows=int(limit) if limit else None)
-            except Exception:
-                return pd.DataFrame()
+                return pd.read_excel(
+                    file_path,
+                    sheet_name=sheet_name,
+                    nrows=int(limit) if limit else None,
+                    engine="openpyxl",
+                )
+            except Exception as e:
+                logger.warning(
+                    "[ProfitTable] read_sheet failed: sheet=%s file=%s error=%s",
+                    sheet_name,
+                    file_path,
+                    e,
+                    exc_info=True,
+                )
+                try:
+                    xf = pd.ExcelFile(file_path, engine="openpyxl")
+                    target = None
+                    if isinstance(sheet_name, str):
+                        want = sheet_name.strip()
+                        for idx, name in enumerate(xf.sheet_names):
+                            if str(name).strip() == want:
+                                target = idx
+                                break
+                    if target is None:
+                        target = sheet_name
+                    df = xf.parse(target, nrows=int(limit) if limit else None)
+                    logger.info(
+                        "[ProfitTable] read_sheet fallback success: sheet=%s resolved=%s",
+                        sheet_name,
+                        target,
+                    )
+                    return df
+                except Exception as e2:
+                    logger.warning(
+                        "[ProfitTable] read_sheet fallback failed: sheet=%s file=%s error=%s",
+                        sheet_name,
+                        file_path,
+                        e2,
+                        exc_info=True,
+                    )
+                    return pd.DataFrame()
 
         # 来源Sheet（缺失则为空表）
         orders = _read_sheet('订单明细', nrows)
@@ -1174,6 +1213,9 @@ class WorkflowEngine:
         returns = _read_sheet('退货', nrows)
         funds = _read_sheet('资金日报', nrows)
         alloc = _read_sheet('分摊费用', nrows)
+        gifts = _read_sheet('礼品', nrows)
+        gifts_hu = _read_sheet('胡礼品', nrows)
+        travel = _read_sheet('旅游8月份分12个月下费用', nrows)
         payroll = _read_sheet('工资表', nrows)
         finance = _read_sheet('财务系统', nrows)
         fuiou = _read_sheet('富友流水', nrows)
@@ -1204,6 +1246,9 @@ class WorkflowEngine:
             '特特殊一级经理姓名', '特特殊一级经理提成比例', '特特殊一级经理提成金额',
             '股东1姓名', '股东1提成比例', '股东1提成金额', '股东2姓名', '股东2提成比例', '股东2提成金额', '品牌、软件公司'
         ]
+        expense_start_idx = columns.index('三、费用')
+        expense_end_idx = columns.index('四、利润')
+        expense_cols = columns[expense_start_idx + 1:expense_end_idx]
 
         def _normalize_store_name(val: Any) -> str:
             s = '' if val is None else str(val)
@@ -1216,6 +1261,17 @@ class WorkflowEngine:
 
         def _to_num(series: pd.Series) -> pd.Series:
             return pd.to_numeric(series, errors='coerce').fillna(0)
+
+        def _pick_amount_col(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                return None
+            for col in df.columns:
+                if not isinstance(col, str):
+                    continue
+                for kw in keywords:
+                    if kw in col:
+                        return col
+            return None
 
         def _infer_team_name() -> str:
             for df, col in [(orders, '所属团队'), (live, '所属团队'), (returns, '团队'), (funds, '团队'), (finance, '市场团队')]:
@@ -1286,7 +1342,7 @@ class WorkflowEngine:
             orders_f = _filter_ym(orders_f, '订单提交时间')
             orders_f['_store'] = orders_f['所属门店'].map(_normalize_store_name) if '所属门店' in orders_f.columns else ''
 
-        # 门店编号映射（市场定额：店面 → 店面编号）
+        # 门店编号映射（优先财务系统，市场定额作为兜底）
         store_id_map: Dict[str, int] = {}
         if isinstance(quota, pd.DataFrame) and (not quota.empty) and '店面' in quota.columns and '店面编号' in quota.columns:
             q = quota.copy()
@@ -1319,6 +1375,17 @@ class WorkflowEngine:
             s = _to_num(orders_f.loc[m, amount_col])
             return s.groupby(orders_f.loc[m, '_store']).sum()
 
+        def _sum_orders_net(mask: pd.Series, pay_col: str, profit_col: str) -> pd.Series:
+            if orders_f.empty or pay_col not in orders_f.columns:
+                return pd.Series(dtype=float)
+            m = mask.fillna(False)
+            if int(m.sum()) == 0:
+                return pd.Series(dtype=float)
+            pay = _to_num(orders_f.loc[m, pay_col])
+            profit = _to_num(orders_f.loc[m, profit_col]) if profit_col in orders_f.columns else 0
+            net = pay - profit
+            return net.groupby(orders_f.loc[m, '_store']).sum()
+
         def _sum_orders_cost(mask: pd.Series) -> pd.Series:
             if orders_f.empty or '成本合计' not in orders_f.columns:
                 return pd.Series(dtype=float)
@@ -1340,7 +1407,7 @@ class WorkflowEngine:
         is_gift = gift != '非赠品'
 
         s_rev_main_perf = _sum_orders(is_main & is_perf, '订单实际支付')
-        s_rev_main_nonperf = _sum_orders(is_main & is_nonperf, '订单实际支付')
+        s_rev_main_nonperf = _sum_orders_net(is_main & is_nonperf, '订单实际支付', '门店利润金额')
         s_rev_group_perf = _sum_orders(is_group & is_perf, '订单实际支付')
         s_rev_group_nonperf = _sum_orders(is_group & is_nonperf, '订单实际支付')
 
@@ -1383,7 +1450,7 @@ class WorkflowEngine:
         if not returns_f.empty:
             if team_name and '团队' in returns_f.columns:
                 returns_f = returns_f[returns_f['团队'].astype(str) == team_name].copy()
-            date_col = '订单时间' if '订单时间' in returns_f.columns else ('申请时间' if '申请时间' in returns_f.columns else None)
+            date_col = '申请时间' if '申请时间' in returns_f.columns else ('订单时间' if '订单时间' in returns_f.columns else None)
             if date_col:
                 returns_f = _filter_ym(returns_f, date_col)
             returns_f['_store'] = returns_f['门店'].map(_normalize_store_name) if '门店' in returns_f.columns else ''
@@ -1397,9 +1464,11 @@ class WorkflowEngine:
             s = _to_num(returns_f.loc[m, amount_col])
             return s.groupby(returns_f.loc[m, '_store']).sum()
 
-        ret_kind = returns_f['是否团品'].astype(str) if (not returns_f.empty and '是否团品' in returns_f.columns) else pd.Series([], dtype=str)
-        s_ret_amt_main = _sum_returns(ret_kind == '主品', '总退货金额')
-        s_ret_cost_all = _sum_returns(pd.Series([True] * len(returns_f)), '成本合计') if (not returns_f.empty) else pd.Series(dtype=float)
+        ret_perf = returns_f['是否计入业绩'].astype(str) == '计入业绩' if (not returns_f.empty and '是否计入业绩' in returns_f.columns) else pd.Series([False] * len(returns_f))
+        ret_main = returns_f['是否团品'].astype(str) == '主品' if (not returns_f.empty and '是否团品' in returns_f.columns) else pd.Series([False] * len(returns_f))
+        ret_mask = ret_perf | ret_main
+        s_ret_amt_main = _sum_returns(ret_mask, '总退货金额')
+        s_ret_cost_all = _sum_returns(pd.Series([True] * len(returns_f), index=returns_f.index), '成本合计') if (not returns_f.empty) else pd.Series(dtype=float)
 
         # ========== 工资表：一线工资（税前工资） ==========
         payroll_f = payroll.copy() if isinstance(payroll, pd.DataFrame) else pd.DataFrame()
@@ -1413,6 +1482,9 @@ class WorkflowEngine:
             payroll_f['_store'] = payroll_f['门店名称'].map(_normalize_store_name) if '门店名称' in payroll_f.columns else ''
 
         s_salary = _to_num(payroll_f['税前工资']).groupby(payroll_f['_store']).sum() if (not payroll_f.empty and '税前工资' in payroll_f.columns) else pd.Series(dtype=float)
+        secondary_total = 0.0
+        if (not payroll_f.empty) and '职位' in payroll_f.columns and '税前工资' in payroll_f.columns:
+            secondary_total = float(_to_num(payroll_f.loc[payroll_f['职位'].astype(str).str.contains('市场库管', na=False), '税前工资']).sum())
 
         # ========== 财务系统：任务款 ==========
         finance_f = finance.copy() if isinstance(finance, pd.DataFrame) else pd.DataFrame()
@@ -1420,15 +1492,27 @@ class WorkflowEngine:
             if team_name and '市场团队' in finance_f.columns:
                 finance_f = finance_f[finance_f['市场团队'].astype(str) == team_name].copy()
             if '月份' in finance_f.columns:
-                finance_f = finance_f[_to_num(finance_f['月份']).astype(int) == ym_int].copy()
+                if finance_f['月份'].dtype == object:
+                    key = f"{year:04d}-{month:02d}"
+                    finance_f = finance_f[finance_f['月份'].astype(str).str.contains(key, na=False)].copy()
+                else:
+                    finance_f = finance_f[_to_num(finance_f['月份']).astype(int) == ym_int].copy()
             finance_f['_store'] = finance_f['门店名称'].map(_normalize_store_name) if '门店名称' in finance_f.columns else ''
 
+        if not finance_f.empty and '门店名称' in finance_f.columns and '门店ID' in finance_f.columns:
+            for _, r in finance_f.dropna(subset=['门店名称']).iterrows():
+                st = _normalize_store_name(r['门店名称'])
+                sid = _to_num(pd.Series([r['门店ID']])).iloc[0]
+                if st and sid:
+                    store_id_map[st] = int(sid)
+
         s_task = _to_num(finance_f['任务款']).groupby(finance_f['_store']).sum() if (not finance_f.empty and '任务款' in finance_f.columns) else pd.Series(dtype=float)
+        s_redpacket = _to_num(finance_f['其他款1']).groupby(finance_f['_store']).sum() if (not finance_f.empty and '其他款1' in finance_f.columns) else pd.Series(dtype=float)
 
         # ========== 富友流水：手续费 ==========
         fuiou_f = fuiou.copy() if isinstance(fuiou, pd.DataFrame) else pd.DataFrame()
         if not fuiou_f.empty:
-            fuiou_f = _filter_ym(fuiou_f, '交易日期') if '交易日期' in fuiou_f.columns else fuiou_f
+            # 标准口径不按交易日期过滤
             fuiou_f['_store'] = fuiou_f['门店名称'].map(_normalize_store_name) if '门店名称' in fuiou_f.columns else ''
 
         s_fuiou_fee = _to_num(fuiou_f['订单手续费']).groupby(fuiou_f['_store']).sum() if (not fuiou_f.empty and '订单手续费' in fuiou_f.columns) else pd.Series(dtype=float)
@@ -1437,19 +1521,25 @@ class WorkflowEngine:
         funds_f = funds.copy() if isinstance(funds, pd.DataFrame) else pd.DataFrame()
         if not funds_f.empty:
             if team_name and '团队' in funds_f.columns:
-                funds_f = funds_f[funds_f['团队'].astype(str) == team_name].copy()
-            funds_f = _filter_ym(funds_f, '日期') if '日期' in funds_f.columns else funds_f
+                key = office_name or team_name
+                funds_f = funds_f[funds_f['团队'].astype(str).str.contains(key, na=False)].copy()
+            # 资金日报存在大量空日期，标准口径不按日期过滤
             funds_f['_store'] = funds_f['店面名称'].map(_normalize_store_name) if '店面名称' in funds_f.columns else ''
 
-        amount_col = None
-        for c in ['减少', '（市场报销）', '增加']:
-            if not funds_f.empty and c in funds_f.columns:
-                amount_col = c
-                break
+        amount_col = _pick_amount_col(funds_f, ['减少'])
+        if amount_col is None:
+            amount_col = _pick_amount_col(funds_f, ['增加'])
         funds_pivot = pd.DataFrame()
         if (not funds_f.empty) and amount_col and '科目' in funds_f.columns:
             funds_f['_amt'] = _to_num(funds_f[amount_col])
             funds_pivot = funds_f.pivot_table(index='_store', columns='科目', values='_amt', aggfunc='sum', fill_value=0)
+
+        # ========== 市场定额：门店水电固定费用 ==========
+        s_water_fixed = pd.Series(dtype=float)
+        if isinstance(quota, pd.DataFrame) and (not quota.empty) and '店面' in quota.columns and '水电固定费用' in quota.columns:
+            q = quota.copy()
+            q['_store'] = q['店面'].map(_normalize_store_name)
+            s_water_fixed = _to_num(q['水电固定费用']).groupby(q['_store']).sum()
 
         # ========== 房租：按月份摊销（选择与当前门店列表交集更多的房租表） ==========
         def _rent_series(df: pd.DataFrame) -> (pd.Series, Dict[str, str]):
@@ -1482,19 +1572,142 @@ class WorkflowEngine:
         rent_s = rent_s_liu if inter_liu >= inter_hu else rent_s_hu
         manager_map = manager_map_liu if inter_liu >= inter_hu else manager_map_hu
 
-        # ========== 分摊费用：代账费/门店税费/企微分摊 ==========
-        alloc_f = alloc.copy() if isinstance(alloc, pd.DataFrame) else pd.DataFrame()
-        if not alloc_f.empty:
-            team_col = '团队.1' if '团队.1' in alloc_f.columns else ('团队' if '团队' in alloc_f.columns else None)
-            if team_col and (office_name or team_name):
-                key = office_name or team_name
-                alloc_f = alloc_f[alloc_f[team_col].astype(str).str.contains(key, na=False)].copy()
-            if '门店' in alloc_f.columns:
-                alloc_f['_store'] = alloc_f['门店'].map(_normalize_store_name)
+        # ========== 分摊费用：直播流量/仓储/企微/税费/手续费 ==========
+        alloc_raw = alloc.copy() if isinstance(alloc, pd.DataFrame) else pd.DataFrame()
+        alloc_h1 = pd.DataFrame()
+        try:
+            alloc_h1 = pd.read_excel(file_path, sheet_name='分摊费用', header=1, nrows=int(nrows) if nrows else None)
+        except Exception:
+            alloc_h1 = pd.DataFrame()
 
-        s_tax = _to_num(alloc_f['门店税费']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '门店税费' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
-        s_qiye = _to_num(alloc_f['企信分摊金额']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '企信分摊金额' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
-        s_daizhang = _to_num(alloc_f['10月下费用']).groupby(alloc_f['_store']).sum() if (not alloc_f.empty and '10月下费用' in alloc_f.columns and '_store' in alloc_f.columns) else pd.Series(dtype=float)
+        s_live_flow = pd.Series(dtype=float)
+        if not alloc_h1.empty and '门店名称' in alloc_h1.columns and '摊销金额' in alloc_h1.columns:
+            d = alloc_h1.copy()
+            d['_store'] = d['门店名称'].map(_normalize_store_name)
+            s_live_flow = _to_num(d['摊销金额']).groupby(d['_store']).sum()
+
+        s_warehouse = pd.Series(dtype=float)
+        s_interest = pd.Series(dtype=float)
+        qiye_total = 0.0
+        tax_total = 0.0
+        other_alloc_total = 0.0
+        warehouse_share = 0.0
+
+        if not alloc_raw.empty:
+            team_cols = [c for c in ['团队', '团队.1'] if c in alloc_raw.columns]
+            alloc_team = alloc_raw
+            if team_cols and (office_name or team_name):
+                key = office_name or team_name
+                mask = pd.Series([False] * len(alloc_raw), index=alloc_raw.index)
+                for c in team_cols:
+                    mask = mask | alloc_raw[c].astype(str).str.contains(key, na=False)
+                alloc_team = alloc_raw[mask].copy()
+
+            if '企信分摊金额' in alloc_team.columns:
+                qiye_total = float(_to_num(alloc_team['企信分摊金额']).sum())
+            if '门店税费' in alloc_team.columns:
+                tax_total = float(_to_num(alloc_team['门店税费']).sum())
+            for c in ['讲师费', '指挥部奖金']:
+                if c in alloc_team.columns:
+                    other_alloc_total += float(_to_num(alloc_team[c]).sum())
+
+            if '门店' in alloc_raw.columns and '金额' in alloc_raw.columns:
+                d = alloc_raw.copy()
+                d['_store'] = d['门店'].map(_normalize_store_name)
+                s_interest = _to_num(d['金额']).groupby(d['_store']).sum()
+
+            if '门店.1' in alloc_raw.columns and '汇总' in alloc_raw.columns:
+                d = alloc_raw.copy()
+                d['_store'] = d['门店.1'].map(_normalize_store_name)
+                s_warehouse = _to_num(d['汇总']).groupby(d['_store']).sum()
+
+            platform_col = '平台' if '平台' in alloc_raw.columns else None
+            if platform_col:
+                platform_series = alloc_raw[platform_col].astype(str)
+                key = team_name or office_name
+                mask = platform_series == (key or '')
+                if not mask.any() and office_name:
+                    mask = platform_series == office_name
+                if not mask.any() and key:
+                    mask = platform_series.str.contains(key, na=False)
+                d = alloc_raw[mask].copy()
+                if not d.empty:
+                    if '门店.1' in d.columns:
+                        team_key = team_name or office_name or ''
+                        d = d[
+                            d['门店.1'].isna()
+                            | (d['门店.1'].astype(str).str.strip() == '')
+                            | (d['门店.1'].astype(str).str.strip() == team_key)
+                        ].copy()
+                    total_wh = 0.0
+                    for c in ['总仓', '成都仓', '沈阳仓']:
+                        if c in d.columns:
+                            total_wh += float(_to_num(d[c]).sum())
+                    if stores:
+                        warehouse_share = total_wh / len(stores)
+
+        # ========== 礼品/分享会礼品 ==========
+        def _gift_series(df: pd.DataFrame, store_col: str, remark_col: str, remark_value: str) -> pd.Series:
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                return pd.Series(dtype=float)
+            if store_col not in df.columns or remark_col not in df.columns or '成本合计' not in df.columns:
+                return pd.Series(dtype=float)
+            d = df.copy()
+            d['_store'] = d[store_col].map(_normalize_store_name)
+            d['_remark'] = d[remark_col].astype(str).str.strip()
+            d = d[d['_remark'] == remark_value].copy()
+            return _to_num(d['成本合计']).groupby(d['_store']).sum()
+
+        gift_remark_col = '备注1' if '备注1' in gifts.columns else '备注'
+        if isinstance(gifts, pd.DataFrame):
+            remark_samples = []
+            if gift_remark_col in gifts.columns:
+                remark_samples = (
+                    gifts[gift_remark_col]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                    .tolist()[:10]
+                )
+            logger.info(
+                "[ProfitTable] gifts shape=%s cols=%s remark_samples=%s",
+                getattr(gifts, "shape", None),
+                list(gifts.columns) if isinstance(gifts, pd.DataFrame) else None,
+                remark_samples,
+            )
+        s_gift_main = _gift_series(gifts, '客户名称', gift_remark_col, '主品赠送')
+        s_gift_small = _gift_series(gifts, '客户名称', gift_remark_col, '小单礼品')
+        s_gift_maint = _gift_series(gifts, '客户名称', gift_remark_col, '维护客户礼品')
+        s_gift_group = _gift_series(gifts, '客户名称', gift_remark_col, '团品')
+        s_share_gift = _gift_series(gifts_hu, '客户名称', '备注' if '备注' in gifts_hu.columns else '备注1', '分享会礼品')
+        logger.info(
+            "[ProfitTable] gifts main=%s small=%s maint=%s group=%s",
+            s_gift_main.to_dict(),
+            s_gift_small.to_dict(),
+            s_gift_maint.to_dict(),
+            s_gift_group.to_dict(),
+        )
+
+        # ========== 旅游费用 ==========
+        s_travel = pd.Series(dtype=float)
+        if isinstance(travel, pd.DataFrame) and (not travel.empty) and '店面名称' in travel.columns:
+            t = travel.copy()
+            t['_store'] = t['店面名称'].map(_normalize_store_name)
+            travel_amt_col = _pick_amount_col(t, ['减少'])
+            if travel_amt_col:
+                s_travel = _to_num(t[travel_amt_col]).groupby(t['_store']).sum()
+
+        store_count = max(len(stores), 1)
+        exec_salary = 3500.0 / store_count
+        exec_social = 1228.65 / store_count
+        secondary_per_store = secondary_total / store_count if secondary_total else 0.0
+        company_service_fee = 2000.0
+        daizhang_fee = 2000.0 / 12
+        qiye_per_store = qiye_total / store_count if qiye_total else 0.0
+        other_alloc_per_store = other_alloc_total / store_count if other_alloc_total else 0.0
+        other_fee_fixed = 800.0
+        s_tax = pd.Series(dtype=float)
 
         # ========== 组装输出 ==========
         rows: List[Dict[str, Any]] = []
@@ -1530,13 +1743,15 @@ class WorkflowEngine:
             row['计业绩产品成本'] = float(s_cost_main_perf.get(st, 0))
             row['计业绩产品赠品（主品）'] = float(s_cost_main_gift.get(st, 0))
             row['不计业绩产品成本'] = float(s_cost_main_nonperf.get(st, 0))
+            row['成本优惠'] = 2000.0
             row['退货成本'] = float(-s_ret_cost_all.get(st, 0))
-            row['计业绩团品成本'] = float(s_cost_group_perf.get(st, 0))
-            row['不计业绩团品成本'] = float(s_cost_group_nonperf.get(st, 0))
+            row['计业绩团品成本'] = 0.0
+            row['不计业绩团品成本'] = float(s_gift_group.get(st, 0))
             row['二、成本'] = (
                 row['计业绩产品成本']
                 + row['计业绩产品赠品（主品）']
                 + row['不计业绩产品成本']
+                + row['成本优惠']
                 + row['退货成本']
                 + row['计业绩团品成本']
                 + row['不计业绩团品成本']
@@ -1544,35 +1759,61 @@ class WorkflowEngine:
 
             # 费用（只填能从来源表明确得到的）
             row['一线工资'] = float(s_salary.get(st, 0))
+            row['高管工资'] = float(exec_salary)
+            row['二线工资（人事司机）'] = float(secondary_per_store)
+            row['高管社保'] = float(exec_social)
+            water_reported = 0.0
             if not funds_pivot.empty:
                 row['一线社保'] = float(funds_pivot.get('一线社保', pd.Series(dtype=float)).get(st, 0))
-                row['高管社保'] = float(funds_pivot.get('高管社保', pd.Series(dtype=float)).get(st, 0))
-                row['门店水、电、液化气'] = float(funds_pivot.get('门店水、电、液化气', pd.Series(dtype=float)).get(st, 0))
+                water_reported = float(funds_pivot.get('门店水、电、液化气', pd.Series(dtype=float)).get(st, 0))
+            row['门店水、电、液化气'] = float(water_reported + s_water_fixed.get(st, 0))
             row['任务款'] = float(s_task.get(st, 0))
+            row['红包'] = float(s_redpacket.get(st, 0))
             row['门店房租'] = float(rent_s.get(st, 0))
-            row['代账费'] = float(s_daizhang.get(st, 0))
+            row['公司服务费'] = float(company_service_fee)
+            row['代账费'] = float(daizhang_fee)
             row['门店税费'] = float(s_tax.get(st, 0))
-            row['企微年费分摊'] = float(s_qiye.get(st, 0))
+            row['企微年费分摊'] = float(qiye_per_store)
             row['富友手续费（千分之2.2）'] = float(s_fuiou_fee.get(st, 0))
+            row['主品赠送（非主品）'] = float(s_gift_main.get(st, 0))
+            row['小单礼品'] = float(s_gift_small.get(st, 0))
+            row['维护客户礼品'] = float(s_gift_maint.get(st, 0))
+            row['分享会礼品'] = float(s_share_gift.get(st, 0))
+            row['旅游'] = float(s_travel.get(st, 0))
+            row['直播流量费分摊'] = float(s_live_flow.get(st, 0))
+            row['仓储运费分摊'] = float(s_warehouse.get(st, 0) + warehouse_share)
+            row['利息收支、手续费（转账）'] = float(s_interest.get(st, 0))
+            row['其他分摊'] = float(other_alloc_per_store)
+            row['其他费用'] = float(other_fee_fixed)
 
-            expense_parts = [
-                row.get('一线工资', 0) or 0,
-                row.get('一线社保', 0) or 0,
-                row.get('高管社保', 0) or 0,
-                row.get('门店水、电、液化气', 0) or 0,
-                row.get('任务款', 0) or 0,
-                row.get('门店房租', 0) or 0,
-                row.get('代账费', 0) or 0,
-                row.get('门店税费', 0) or 0,
-                row.get('企微年费分摊', 0) or 0,
-                row.get('富友手续费（千分之2.2）', 0) or 0,
-            ]
-            row['三、费用'] = float(sum(expense_parts))
+            row['三、费用'] = float(sum((row.get(c, 0) or 0) for c in expense_cols))
 
             row['四、利润'] = float(row['一、收入'] - row['二、成本'] - row['三、费用'])
             rows.append(row)
 
-        return pd.DataFrame(rows, columns=columns)
+        df = pd.DataFrame(rows, columns=columns)
+        if not df.empty:
+            total_row: Dict[str, Any] = {c: None for c in columns}
+            total_row['门店名称（自定义）'] = '合计'
+            total_row['所属实体店门店名称'] = '合计'
+            total_row['erp门店名称'] = '合计'
+            meta_cols = {
+                '年份', '月份', '市场', '办公室', '店长姓名', 'erp门店编号', '门店名称（自定义）',
+                '开店时间', '关店时间', 'erp门店名称', '是否店中店', '所属实体店门店名称',
+                '一代管道', '二代管道', '三代管道', '四代管道', '五代管道', '六代管道', '股东1', '股东2',
+                '一代经理级别', '一代提成比例', '二代经理级别', '二代提成比例', '三代经理级别', '三代提成比例',
+                '一级经理姓名', '一级经理提成比例', '特殊一级经理姓名', '特殊一级经理提成比例',
+                '特特殊一级经理姓名', '特特殊一级经理提成比例', '股东1姓名', '股东1提成比例',
+                '股东2姓名', '股东2提成比例', '品牌、软件公司'
+            }
+            for c in columns:
+                if c in meta_cols:
+                    continue
+                series = pd.to_numeric(df[c], errors='coerce')
+                if series.notna().any():
+                    total_row[c] = float(series.fillna(0).sum())
+            df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+        return df
 
     def _execute_profit_income(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
         df = df.copy()

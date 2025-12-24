@@ -17,6 +17,7 @@ from config import ARK_API_KEY, ARK_BASE_URL, ARK_MODEL_NAME
 from openai import AsyncOpenAI  # type: ignore
 
 router = APIRouter()
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 def _to_data_url(image_bytes: bytes, content_type: Optional[str]) -> str:
@@ -57,6 +58,62 @@ def _validate_image_upload(file: UploadFile, image_bytes: bytes) -> None:
         raise HTTPException(status_code=400, detail="图片为空")
     if len(image_bytes) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="图片过大（请小于 8MB）")
+
+
+def _is_pdf_upload(file: UploadFile) -> bool:
+    content_type = (file.content_type or "").lower()
+    if content_type == "application/pdf":
+        return True
+    name = (file.filename or "").lower()
+    return name.endswith(".pdf")
+
+
+def _validate_pdf_upload(pdf_bytes: bytes) -> None:
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="PDF is empty")
+    if len(pdf_bytes) > _MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="PDF too large (max 8MB)")
+
+
+def _convert_pdf_to_image(pdf_bytes: bytes) -> bytes:
+    try:
+        import fitz  # type: ignore
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Missing PDF dependency: {e}")
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"PDF open failed: {e}")
+
+    try:
+        if doc.page_count < 1:
+            raise HTTPException(status_code=400, detail="PDF has no pages")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        return pix.tobytes("png")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"PDF render failed: {e}")
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+def _prepare_upload(file: UploadFile, raw_bytes: bytes) -> tuple[bytes, Optional[str]]:
+    if _is_pdf_upload(file):
+        _validate_pdf_upload(raw_bytes)
+        image_bytes = _convert_pdf_to_image(raw_bytes)
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="PDF render empty")
+        if len(image_bytes) > _MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="PDF render too large (max 8MB)")
+        return image_bytes, "image/png"
+    _validate_image_upload(file, raw_bytes)
+    return raw_bytes, file.content_type
 
 
 def _get_openai_client():
@@ -181,11 +238,11 @@ async def extract_text(file: UploadFile = File(...), prompt: str = Form("请提�
     兼容旧版调用：一次性返回结果（无真实进度）
     """
     _require_key()
-    image_bytes = await file.read()
-    _validate_image_upload(file, image_bytes)
+    raw_bytes = await file.read()
+    image_bytes, content_type = _prepare_upload(file, raw_bytes)
 
     client = _get_openai_client()
-    data_url = _to_data_url(image_bytes, file.content_type)
+    data_url = _to_data_url(image_bytes, content_type)
     safe_prompt = (prompt or "").strip() or "请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"
 
     try:
@@ -220,15 +277,15 @@ async def extract_text_start(
     启动识图任务，返回 job_id；前端可用 SSE 订阅真实阶段与流式输出。
     """
     _require_key()
-    image_bytes = await file.read()
-    _validate_image_upload(file, image_bytes)
+    raw_bytes = await file.read()
+    image_bytes, content_type = _prepare_upload(file, raw_bytes)
 
     job_id = uuid.uuid4().hex[:10]
     q: "asyncio.Queue[dict]" = asyncio.Queue()
     job = _Job(id=job_id, created_at=time.time(), queue=q, task=None)
     _JOBS[job_id] = job
 
-    job.task = asyncio.create_task(_run_job(job, image_bytes, file.content_type, prompt))
+    job.task = asyncio.create_task(_run_job(job, image_bytes, content_type, prompt))
     _cleanup_job_later(job_id)
     return {"status": "success", "job_id": job_id}
 

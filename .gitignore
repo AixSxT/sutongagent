@@ -3,6 +3,7 @@ frontend/dist/
 frontend/.vite/
 uploads/
 data/
+docx/
 __pycache__/
 *.pyc
 .env
