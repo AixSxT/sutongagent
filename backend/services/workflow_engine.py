@@ -1707,7 +1707,19 @@ class WorkflowEngine:
         qiye_per_store = qiye_total / store_count if qiye_total else 0.0
         other_alloc_per_store = other_alloc_total / store_count if other_alloc_total else 0.0
         other_fee_fixed = 800.0
-        s_tax = pd.Series(dtype=float)
+        income_total_by_store = (
+            s_rev_main_perf
+            .add(s_rev_main_nonperf, fill_value=0)
+            .add(s_rev_group_perf, fill_value=0)
+            .add(s_rev_group_nonperf, fill_value=0)
+            .add(-s_ret_amt_main, fill_value=0)
+        )
+        income_total_by_store = income_total_by_store.reindex(stores, fill_value=0)
+        income_total_sum = float(income_total_by_store.sum()) if not income_total_by_store.empty else 0.0
+        if tax_total and income_total_sum > 0:
+            s_tax = income_total_by_store / income_total_sum * tax_total
+        else:
+            s_tax = pd.Series(dtype=float)
 
         # ========== 组装输出 ==========
         rows: List[Dict[str, Any]] = []
@@ -1743,10 +1755,12 @@ class WorkflowEngine:
             row['计业绩产品成本'] = float(s_cost_main_perf.get(st, 0))
             row['计业绩产品赠品（主品）'] = float(s_cost_main_gift.get(st, 0))
             row['不计业绩产品成本'] = float(s_cost_main_nonperf.get(st, 0))
-            row['成本优惠'] = 2000.0
+            row['成本优惠'] = -2000.0
             row['退货成本'] = float(-s_ret_cost_all.get(st, 0))
             row['计业绩团品成本'] = 0.0
             row['不计业绩团品成本'] = float(s_gift_group.get(st, 0))
+            row['旅游成本（非赠）'] = 0.0
+            row['其他成本'] = 0.0
             row['二、成本'] = (
                 row['计业绩产品成本']
                 + row['计业绩产品赠品（主品）']
@@ -1755,6 +1769,8 @@ class WorkflowEngine:
                 + row['退货成本']
                 + row['计业绩团品成本']
                 + row['不计业绩团品成本']
+                + row['旅游成本（非赠）']
+                + row['其他成本']
             )
 
             # 费用（只填能从来源表明确得到的）
@@ -2111,7 +2127,17 @@ class WorkflowEngine:
 
         # 统一数值列为 numeric，缺失填0
         income_cols = ['计业绩产品收入', '不计业绩产品收入', '计业绩团品收入', '不计业绩团品收入']
-        cost_cols = ['计业绩产品成本', '不计业绩产品成本', '计业绩团品成本', '不计业绩团品成本']
+        cost_cols = [
+            '计业绩产品成本',
+            '计业绩产品赠品（主品）',
+            '不计业绩产品成本',
+            '成本优惠',
+            '退货成本',
+            '计业绩团品成本',
+            '不计业绩团品成本',
+            '旅游成本（非赠）',
+            '其他成本',
+        ]
         expense_cols = ['一线工资', '红包', '任务款', '门店房租', '门店水、电、液化气', '门店物业费', '其他分摊', '其他费用']
 
         for col in income_cols + cost_cols + expense_cols:
