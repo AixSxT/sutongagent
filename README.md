@@ -32,7 +32,7 @@
 **1. 启动后端 (Port: 8000)**
 ```bash
 cd backend
-python -m uvicorn main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 5200
 ```
 
 **2. 启动前端 (Port: 3000)**
