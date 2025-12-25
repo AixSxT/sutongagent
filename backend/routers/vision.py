@@ -37,6 +37,7 @@ class _Job:
     created_at: float
     queue: "asyncio.Queue[dict]"
     task: Optional[asyncio.Task]
+    owner_id: str
     cancelled: bool = False
     seq: int = 0
     text_acc: str = ""
@@ -123,6 +124,19 @@ def _get_openai_client():
         raise HTTPException(status_code=500, detail=f"缺少 openai 依赖: {e}")
 
 
+async def _prepare_upload_async(file: UploadFile, raw_bytes: bytes) -> tuple[bytes, Optional[str]]:
+    if _is_pdf_upload(file):
+        _validate_pdf_upload(raw_bytes)
+        image_bytes = await asyncio.to_thread(_convert_pdf_to_image, raw_bytes)
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="PDF render empty")
+        if len(image_bytes) > _MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="PDF render too large (max 8MB)")
+        return image_bytes, "image/png"
+    _validate_image_upload(file, raw_bytes)
+    return raw_bytes, file.content_type
+
+
 async def _emit(job: _Job, event: str, data: dict) -> None:
     job.seq += 1
     payload = dict(data or {})
@@ -135,7 +149,7 @@ async def _run_job(job: _Job, image_bytes: bytes, content_type: Optional[str], p
     job.stage = "upload_received"
 
     client = _get_openai_client()
-    data_url = _to_data_url(image_bytes, content_type)
+    data_url = await asyncio.to_thread(_to_data_url, image_bytes, content_type)
     safe_prompt = (prompt or "").strip() or "请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"
 
     await _emit(job, "stage", {"stage": "model_request_started"})
@@ -239,7 +253,7 @@ async def extract_text(file: UploadFile = File(...), prompt: str = Form("请提�
     """
     _require_key()
     raw_bytes = await file.read()
-    image_bytes, content_type = _prepare_upload(file, raw_bytes)
+    image_bytes, content_type = await _prepare_upload_async(file, raw_bytes)
 
     client = _get_openai_client()
     data_url = _to_data_url(image_bytes, content_type)
@@ -270,6 +284,7 @@ async def extract_text(file: UploadFile = File(...), prompt: str = Form("请提�
 # -------------------------
 @router.post("/extract-text/start")
 async def extract_text_start(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form("请提取图片中的所有文字，按原顺序输出。只输出文字，不要添加解释。"),
 ):
@@ -278,11 +293,12 @@ async def extract_text_start(
     """
     _require_key()
     raw_bytes = await file.read()
-    image_bytes, content_type = _prepare_upload(file, raw_bytes)
+    image_bytes, content_type = await _prepare_upload_async(file, raw_bytes)
 
     job_id = uuid.uuid4().hex[:10]
     q: "asyncio.Queue[dict]" = asyncio.Queue()
-    job = _Job(id=job_id, created_at=time.time(), queue=q, task=None)
+    owner_id = request.state.owner_id
+    job = _Job(id=job_id, created_at=time.time(), queue=q, task=None, owner_id=owner_id)
     _JOBS[job_id] = job
 
     job.task = asyncio.create_task(_run_job(job, image_bytes, content_type, prompt))
@@ -298,6 +314,8 @@ async def extract_text_events(job_id: str, request: Request, after: int = 0):
     """
     job = _JOBS.get(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if job.owner_id != request.state.owner_id:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
 
     async def gen():
@@ -329,13 +347,20 @@ async def extract_text_events(job_id: str, request: Request, after: int = 0):
             if event in {"done", "job_error", "cancelled"}:
                 break
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
 @router.post("/extract-text/cancel/{job_id}")
-async def extract_text_cancel(job_id: str):
+async def extract_text_cancel(job_id: str, request: Request):
     job = _JOBS.get(job_id)
     if not job:
+        return {"status": "success", "message": "任务不存在或已结束"}
+    if job.owner_id != request.state.owner_id:
         return {"status": "success", "message": "任务不存在或已结束"}
 
     job.cancelled = True

@@ -3,7 +3,7 @@ AI对话API - 将自然语言转换为工作流
 """
 import json
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Dict, List, Any, Optional
 from services.ai_service import ai_service
@@ -57,7 +57,7 @@ class ChatGenerateRequest(BaseModel):
 
 
 @router.post("/chat/start")
-async def chat_start(request: ChatStartRequest):
+async def chat_start(request: ChatStartRequest, http_request: Request):
     """
     开始AI对话会话
     用户选择表后调用，AI会看到表结构
@@ -69,6 +69,7 @@ async def chat_start(request: ChatStartRequest):
     
     # 获取文件元数据（列名、样例数据）
     file_metadata = []
+    owner_id = http_request.state.owner_id
     for selection in request.selected_files:
         file_id = selection.get("file_id")
         sheet_name = selection.get("sheet_name")
@@ -76,7 +77,7 @@ async def chat_start(request: ChatStartRequest):
         logger.debug(f"[AI-Chat] 获取文件元数据: file_id={file_id}, sheet={sheet_name}")
         
         try:
-            file_record = await excel_service.get_file_record(file_id)
+            file_record = await excel_service.get_file_record(file_id, owner_id)
             if file_record:
                 sheets = file_record.get("sheets", "[]")
                 if isinstance(sheets, str):
@@ -102,14 +103,14 @@ async def chat_start(request: ChatStartRequest):
         raise HTTPException(status_code=400, detail="无法获取所选表的信息")
     
     # 启动对话
-    result = ai_chat_service.start_session(request.selected_files, file_metadata)
+    result = ai_chat_service.start_session(owner_id, request.selected_files, file_metadata)
     logger.info(f"[AI-Chat] 对话已开始: session_id={result.get('session_id')}")
     
     return result
 
 
 @router.post("/chat/message")
-async def chat_message(request: ChatMessageRequest):
+async def chat_message(request: ChatMessageRequest, http_request: Request):
     """
     发送消息到AI对话
     """
@@ -118,7 +119,8 @@ async def chat_message(request: ChatMessageRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
     
-    result = ai_chat_service.send_message(request.session_id, request.message)
+    owner_id = http_request.state.owner_id
+    result = ai_chat_service.send_message(owner_id, request.session_id, request.message)
     
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error", "发送失败"))
@@ -128,13 +130,14 @@ async def chat_message(request: ChatMessageRequest):
 
 
 @router.post("/chat/generate")
-async def chat_generate(request: ChatGenerateRequest):
+async def chat_generate(request: ChatGenerateRequest, http_request: Request):
     """
     确认生成工作流
     """
     logger.info(f"[AI-Chat] 确认生成: session={request.session_id}")
     
-    result = ai_chat_service.generate_workflow(request.session_id)
+    owner_id = http_request.state.owner_id
+    result = ai_chat_service.generate_workflow(owner_id, request.session_id)
     
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error", "生成失败"))
@@ -146,7 +149,7 @@ async def chat_generate(request: ChatGenerateRequest):
 # ============ 原有API ============
 
 @router.post("/generate-workflow")
-async def generate_workflow(request: GenerateWorkflowRequest):
+async def generate_workflow(request: GenerateWorkflowRequest, http_request: Request):
     """
     根据自然语言描述生成工作流（一次性模式）
     """
@@ -160,9 +163,10 @@ async def generate_workflow(request: GenerateWorkflowRequest):
     # 获取文件信息
     files_info = []
     try:
+        owner_id = http_request.state.owner_id
         for file_id in request.file_ids:
             logger.info(f"正在获取文件信息: {file_id}")
-            file_record = await excel_service.get_file_record(file_id)
+            file_record = await excel_service.get_file_record(file_id, owner_id)
             if file_record:
                 sheets = file_record.get("sheets", "[]")
                 if isinstance(sheets, str):

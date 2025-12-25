@@ -60,3 +60,8 @@ npm run dev
 
 Built with ❤️ by Antigravity├── data/             # 数据库文件
 └── start.bat         # 启动脚本
+
+cd backend
+uvicorn main:app --reload --host 127.0.0.1 --port 5201
+cd frontend
+npm run dev

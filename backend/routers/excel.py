@@ -4,7 +4,7 @@ Excel文件上传和解析API
 import os
 import uuid
 import json
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse
 from typing import List
 from services.excel_service import ExcelService
@@ -15,7 +15,7 @@ excel_service = ExcelService()
 
 
 @router.post("/upload")
-async def upload_excel(file: UploadFile = File(...)):
+async def upload_excel(request: Request, file: UploadFile = File(...)):
     """
     上传Excel文件
     
@@ -48,12 +48,14 @@ async def upload_excel(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"解析Excel失败: {str(e)}")
     
     # 保存文件记录
+    owner_id = request.state.owner_id
     await excel_service.save_file_record(
         file_id=file_id,
         filename=saved_filename,
         original_name=file.filename,
         file_path=file_path,
-        sheets=parsed_info["sheets"]
+        sheets=parsed_info["sheets"],
+        owner_id=owner_id
     )
     
     return {
@@ -64,9 +66,10 @@ async def upload_excel(file: UploadFile = File(...)):
 
 
 @router.get("/files")
-async def get_uploaded_files():
+async def get_uploaded_files(request: Request):
     """获取所有已上传的文件列表"""
-    files = await excel_service.get_all_files()
+    owner_id = request.state.owner_id
+    files = await excel_service.get_all_files(owner_id)
     result = []
     for f in files:
         result.append({
@@ -79,9 +82,10 @@ async def get_uploaded_files():
 
 
 @router.get("/file/{file_id}")
-async def get_file_info(file_id: str):
+async def get_file_info(request: Request, file_id: str):
     """获取单个文件的详细信息"""
-    file_record = await excel_service.get_file_record(file_id)
+    owner_id = request.state.owner_id
+    file_record = await excel_service.get_file_record(file_id, owner_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
     
@@ -94,7 +98,7 @@ async def get_file_info(file_id: str):
 
 
 @router.get("/file/{file_id}/sheet/{sheet_name}/preview")
-async def preview_sheet(file_id: str, sheet_name: str, rows: int = 10):
+async def preview_sheet(request: Request, file_id: str, sheet_name: str, rows: int = 10):
     """
     预览Sheet数据
     
@@ -103,7 +107,8 @@ async def preview_sheet(file_id: str, sheet_name: str, rows: int = 10):
         sheet_name: Sheet名称
         rows: 预览行数，默认10行
     """
-    file_record = await excel_service.get_file_record(file_id)
+    owner_id = request.state.owner_id
+    file_record = await excel_service.get_file_record(file_id, owner_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
     
@@ -121,9 +126,10 @@ async def preview_sheet(file_id: str, sheet_name: str, rows: int = 10):
 
 
 @router.delete("/file/{file_id}")
-async def delete_file(file_id: str):
+async def delete_file(request: Request, file_id: str):
     """删除上传的文件"""
-    file_record = await excel_service.get_file_record(file_id)
+    owner_id = request.state.owner_id
+    file_record = await excel_service.get_file_record(file_id, owner_id)
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
     
@@ -132,6 +138,6 @@ async def delete_file(file_id: str):
         os.remove(file_record["file_path"])
     
     # 从数据库删除记录
-    await excel_service.delete_file_record(file_id)
+    await excel_service.delete_file_record(file_id, owner_id)
     
     return {"message": "文件已删除"}

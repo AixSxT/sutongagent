@@ -1,13 +1,14 @@
 """
 FastAPI 应用入口
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from routers import excel, workflow, ai
 from routers import vision
-from database import init_db
+from database import init_db, migrate_legacy_owner
+from utils.anon_id import COOKIE_NAME, COOKIE_MAX_AGE, get_or_create
 
 
 @asynccontextmanager
@@ -32,6 +33,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def anon_owner_middleware(request: Request, call_next):
+    owner_id, cookie_value = get_or_create(request.cookies.get(COOKIE_NAME))
+    request.state.owner_id = owner_id
+    if cookie_value:
+        await migrate_legacy_owner(owner_id)
+    response = await call_next(request)
+    if cookie_value:
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=cookie_value,
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+    return response
 
 # 注册路由
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])

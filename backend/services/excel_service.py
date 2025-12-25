@@ -137,24 +137,25 @@ class ExcelService:
         raise ValueError(f"列 '{column_name}' 不存在于Sheet '{sheet_name}'")
     
     @staticmethod
-    async def save_file_record(file_id: str, filename: str, original_name: str, 
-                               file_path: str, sheets: List[Dict]) -> None:
+    async def save_file_record(file_id: str, filename: str, original_name: str,
+                               file_path: str, sheets: List[Dict], owner_id: str) -> None:
         """保存文件记录到数据库"""
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
-                """INSERT INTO uploaded_files (id, filename, original_name, file_path, sheets)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (file_id, filename, original_name, file_path, json.dumps(sheets, ensure_ascii=False))
+                """INSERT INTO uploaded_files (id, owner_id, filename, original_name, file_path, sheets)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (file_id, owner_id, filename, original_name, file_path, json.dumps(sheets, ensure_ascii=False))
             )
             await db.commit()
     
     @staticmethod
-    async def get_file_record(file_id: str) -> Optional[Dict]:
+    async def get_file_record(file_id: str, owner_id: str) -> Optional[Dict]:
         """获取文件记录"""
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM uploaded_files WHERE id = ?", (file_id,)
+                "SELECT * FROM uploaded_files WHERE id = ? AND owner_id = ?",
+                (file_id, owner_id)
             )
             row = await cursor.fetchone()
             if row:
@@ -162,24 +163,40 @@ class ExcelService:
             return None
     
     @staticmethod
-    async def delete_file_record(file_id: str) -> None:
+    async def delete_file_record(file_id: str, owner_id: str) -> None:
         """从数据库删除文件记录"""
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
-                "DELETE FROM uploaded_files WHERE id = ?", (file_id,)
+                "DELETE FROM uploaded_files WHERE id = ? AND owner_id = ?",
+                (file_id, owner_id)
             )
             await db.commit()
     
     @staticmethod
-    async def get_all_files() -> List[Dict]:
+    async def get_all_files(owner_id: str) -> List[Dict]:
         """获取所有上传的文件"""
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM uploaded_files ORDER BY created_at DESC"
+                "SELECT * FROM uploaded_files WHERE owner_id = ? ORDER BY created_at DESC",
+                (owner_id,)
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_file_paths(file_ids: List[str], owner_id: str) -> Dict[str, str]:
+        """批量获取文件路径映射"""
+        if not file_ids:
+            return {}
+        unique_ids = list(dict.fromkeys([str(fid) for fid in file_ids]))
+        placeholders = ", ".join(["?"] * len(unique_ids))
+        query = f"SELECT id, file_path FROM uploaded_files WHERE owner_id = ? AND id IN ({placeholders})"
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, [owner_id, *unique_ids])
+            rows = await cursor.fetchall()
+            return {row["id"]: row["file_path"] for row in rows}
     
     @staticmethod
     def export_dataframe(df: pd.DataFrame, output_path: str) -> str:

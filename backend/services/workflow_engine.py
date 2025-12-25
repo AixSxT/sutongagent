@@ -35,7 +35,7 @@ class WorkflowContext:
         print(f"[{timestamp}] {message}")
 
 class WorkflowEngine:
-    async def execute_workflow(self, workflow_config: Dict, file_mapping: Dict[str, str]) -> Dict:
+    async def execute_workflow(self, workflow_config: Dict, file_mapping: Dict[str, str], owner_id: str) -> Dict:
         """执行工作流"""
         context = WorkflowContext()
         nodes = workflow_config.get("nodes", [])
@@ -178,7 +178,8 @@ class WorkflowEngine:
         file_mapping: Dict[str, str],
         node_id: str,
         source_rows: int = 600,
-        display_rows: int = 50
+        display_rows: int = 50,
+        owner_id: str = ""
     ) -> Dict:
         """
         预览指定节点的输出（样本执行）：
@@ -496,44 +497,40 @@ class WorkflowEngine:
         # 其余节点复用原执行逻辑
         return await self._execute_node_by_type(node_type, config, input_dfs, context, file_mapping)
 
+    def _resolve_file_path(self, file_id: str, file_mapping: Dict[str, str]) -> str:
+        if not file_id:
+            raise ValueError("数据源节点缺少 file_id")
+        file_path = file_mapping.get(file_id)
+        if file_path and os.path.exists(file_path):
+            return file_path
+        raise FileNotFoundError(f"找不到文件: {file_id}")
+
     def _execute_source_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
         file_id = config.get('file_id')
-        mapped_id = file_mapping.get(file_id, file_id)
+        file_path = self._resolve_file_path(file_id, file_mapping)
+        sheet_name = config.get('sheet_name', 0)
+        header_row = config.get('header_row', 1) - 1
+        skip_rows = config.get('skip_rows', 0)
 
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(mapped_id):
-                file_path = os.path.join(UPLOAD_DIR, f)
-                sheet_name = config.get('sheet_name', 0)
-                header_row = config.get('header_row', 1) - 1
-                skip_rows = config.get('skip_rows', 0)
+        try:
+            sheet_name = int(sheet_name)
+        except Exception:
+            pass
 
-                try:
-                    sheet_name = int(sheet_name)
-                except Exception:
-                    pass
-
-                return pd.read_excel(
-                    file_path,
-                    sheet_name=sheet_name,
-                    header=header_row,
-                    skiprows=range(1, skip_rows + 1) if skip_rows else None,
-                    nrows=int(nrows) if nrows else None
-                )
-
-        raise FileNotFoundError(f"找不到文件: {file_id}")
+        return pd.read_excel(
+            file_path,
+            sheet_name=sheet_name,
+            header=header_row,
+            skiprows=range(1, skip_rows + 1) if skip_rows else None,
+            nrows=int(nrows) if nrows else None
+        )
 
     def _execute_source_csv_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
         file_id = config.get('file_id')
-        mapped_id = file_mapping.get(file_id, file_id)
-
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(mapped_id):
-                file_path = os.path.join(UPLOAD_DIR, f)
-                delimiter = config.get('delimiter', ',')
-                encoding = config.get('encoding', 'utf-8')
-                return pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, nrows=int(nrows) if nrows else None)
-
-        raise FileNotFoundError(f"找不到文件: {file_id}")
+        file_path = self._resolve_file_path(file_id, file_mapping)
+        delimiter = config.get('delimiter', ',')
+        encoding = config.get('encoding', 'utf-8')
+        return pd.read_csv(file_path, delimiter=delimiter, encoding=encoding, nrows=int(nrows) if nrows else None)
 
     def _execute_source_optional_limited(self, config: Dict, file_mapping: Dict, nrows: int) -> pd.DataFrame:
         file_id = config.get('file_id')
@@ -547,24 +544,18 @@ class WorkflowEngine:
     # ========== 数据源实现 ==========
     def _execute_source(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
-        mapped_id = file_mapping.get(file_id, file_id)
+        file_path = self._resolve_file_path(file_id, file_mapping)
+        sheet_name = config.get('sheet_name', 0)
+        header_row = config.get('header_row', 1) - 1
+        skip_rows = config.get('skip_rows', 0)
         
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(mapped_id):
-                file_path = os.path.join(UPLOAD_DIR, f)
-                sheet_name = config.get('sheet_name', 0)
-                header_row = config.get('header_row', 1) - 1
-                skip_rows = config.get('skip_rows', 0)
-                
-                try:
-                    sheet_name = int(sheet_name)
-                except:
-                    pass
-                
-                df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, skiprows=range(1, skip_rows + 1) if skip_rows else None)
-                return df
-                
-        raise FileNotFoundError(f"找不到文件: {file_id}")
+        try:
+            sheet_name = int(sheet_name)
+        except Exception:
+            pass
+        
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, skiprows=range(1, skip_rows + 1) if skip_rows else None)
+        return df
 
     def _execute_source_optional(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
@@ -577,18 +568,12 @@ class WorkflowEngine:
 
     def _execute_source_csv(self, config: Dict, file_mapping: Dict) -> pd.DataFrame:
         file_id = config.get('file_id')
-        mapped_id = file_mapping.get(file_id, file_id)
+        file_path = self._resolve_file_path(file_id, file_mapping)
+        delimiter = config.get('delimiter', ',')
+        encoding = config.get('encoding', 'utf-8')
         
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(mapped_id):
-                file_path = os.path.join(UPLOAD_DIR, f)
-                delimiter = config.get('delimiter', ',')
-                encoding = config.get('encoding', 'utf-8')
-                
-                df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding)
-                return df
-                
-        raise FileNotFoundError(f"找不到文件: {file_id}")
+        df = pd.read_csv(file_path, delimiter=delimiter, encoding=encoding)
+        return df
 
     # ========== 数据清洗实现 ==========
     def _execute_transform(self, df: pd.DataFrame, config: Dict) -> pd.DataFrame:
@@ -1153,15 +1138,8 @@ class WorkflowEngine:
         if not file_id:
             raise ValueError("利润表节点缺少配置：file_id（请选择Excel文件）")
 
-        mapped_id = file_mapping.get(file_id, file_id)
-        file_path = None
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(mapped_id):
-                file_path = os.path.join(UPLOAD_DIR, f)
-                break
-        if not file_path:
-            raise FileNotFoundError(f"找不到文件: {file_id}")
-        logger.info("[ProfitTable] file_id=%s mapped_id=%s file_path=%s", file_id, mapped_id, file_path)
+        file_path = self._resolve_file_path(file_id, file_mapping)
+        logger.info("[ProfitTable] file_id=%s file_path=%s", file_id, file_path)
 
         def _read_sheet(sheet_name: str, limit: Optional[int] = None) -> pd.DataFrame:
             try:
@@ -2288,21 +2266,27 @@ class WorkflowEngine:
         return str(filename)
 
     # ========== 数据库操作方法 ==========
-    async def get_all_workflows(self) -> List[Dict]:
+    async def get_all_workflows(self, owner_id: str) -> List[Dict]:
         import aiosqlite
         from database import DATABASE_PATH
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT id, name, description, created_at, updated_at FROM workflows ORDER BY updated_at DESC")
+            cursor = await db.execute(
+                "SELECT id, name, description, created_at, updated_at FROM workflows WHERE owner_id = ? ORDER BY updated_at DESC",
+                (owner_id,)
+            )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
     
-    async def get_workflow(self, workflow_id: str) -> Optional[Dict]:
+    async def get_workflow(self, owner_id: str, workflow_id: str) -> Optional[Dict]:
         import aiosqlite
         from database import DATABASE_PATH
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,))
+            cursor = await db.execute(
+                "SELECT * FROM workflows WHERE id = ? AND owner_id = ?",
+                (workflow_id, owner_id)
+            )
             row = await cursor.fetchone()
             if row:
                 result = dict(row)
@@ -2310,48 +2294,69 @@ class WorkflowEngine:
                 return result
             return None
     
-    async def save_workflow(self, workflow_id: str, name: str, description: str, config: Dict):
+    async def save_workflow(self, owner_id: str, workflow_id: str, name: str, description: str, config: Dict):
         import aiosqlite
         from database import DATABASE_PATH
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("""
-                INSERT OR REPLACE INTO workflows (id, name, description, config, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (workflow_id, name, description, json.dumps(config, ensure_ascii=False)))
+                INSERT OR REPLACE INTO workflows (id, owner_id, name, description, config, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (workflow_id, owner_id, name, description, json.dumps(config, ensure_ascii=False)))
             await db.commit()
 
-    async def delete_workflow(self, workflow_id: str) -> bool:
+    async def delete_workflow(self, owner_id: str, workflow_id: str) -> bool:
         import aiosqlite
         from database import DATABASE_PATH
         async with aiosqlite.connect(DATABASE_PATH) as db:
-            cursor = await db.execute("DELETE FROM execution_history WHERE workflow_id = ?", (workflow_id,))
+            cursor = await db.execute(
+                "DELETE FROM execution_history WHERE workflow_id = ? AND owner_id = ?",
+                (workflow_id, owner_id)
+            )
             await cursor.close()
-            cursor = await db.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+            cursor = await db.execute(
+                "DELETE FROM workflows WHERE id = ? AND owner_id = ?",
+                (workflow_id, owner_id)
+            )
             deleted = cursor.rowcount > 0
             await cursor.close()
             await db.commit()
             return deleted
     
-    async def save_execution_history(self, workflow_id: str, input_files: List, output_file: str, status: str, result_summary: str) -> str:
+    async def save_execution_history(self, owner_id: str, workflow_id: str, input_files: List, output_file: str, status: str, result_summary: str) -> str:
         import aiosqlite
         from database import DATABASE_PATH
         history_id = str(uuid4())
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute("""
-                INSERT INTO execution_history (id, workflow_id, input_files, output_file, status, result_summary)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (history_id, workflow_id, json.dumps(input_files), output_file, status, result_summary))
+                INSERT INTO execution_history (id, owner_id, workflow_id, input_files, output_file, status, result_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (history_id, owner_id, workflow_id, json.dumps(input_files), output_file, status, result_summary))
             await db.commit()
         return history_id
     
-    async def get_execution_history(self, limit: int = 50) -> List[Dict]:
+    async def get_execution_history(self, owner_id: str, limit: int = 50) -> List[Dict]:
         import aiosqlite
         from database import DATABASE_PATH
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM execution_history ORDER BY created_at DESC LIMIT ?", (limit,))
+            cursor = await db.execute(
+                "SELECT * FROM execution_history WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                (owner_id, limit)
+            )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def get_execution_history_by_output(self, owner_id: str, output_file: str) -> Optional[Dict]:
+        import aiosqlite
+        from database import DATABASE_PATH
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM execution_history WHERE owner_id = ? AND output_file = ? ORDER BY created_at DESC LIMIT 1",
+                (owner_id, output_file)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 # 单例
 workflow_engine = WorkflowEngine()

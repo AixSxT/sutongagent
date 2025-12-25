@@ -17,6 +17,9 @@ ARK_MODEL_NAME = os.getenv("ARK_MODEL_NAME", "doubao-seed-1-6-251015")
 if not ARK_API_KEY:
     raise ValueError("ARK_API_KEY is not set. Please set it in environment or .env.")
 
+# 匿名用户隔离（方案B：签名Cookie）
+ANON_SECRET = os.getenv("ANON_SECRET") or ARK_API_KEY
+
 # 文件存储配置
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")

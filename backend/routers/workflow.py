@@ -5,7 +5,7 @@ import os
 import uuid
 import json
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Dict, List, Any, Optional
@@ -15,6 +15,18 @@ from config import UPLOAD_DIR, DATA_DIR
 
 router = APIRouter()
 excel_service = ExcelService()
+
+
+def _extract_file_ids(workflow_config: Dict[str, Any]) -> List[str]:
+    nodes = workflow_config.get("nodes", []) if isinstance(workflow_config, dict) else []
+    file_ids: List[str] = []
+    for node in nodes:
+        node_data = node.get("data") if isinstance(node, dict) and "data" in node else node
+        config = (node_data or {}).get("config", {}) or {}
+        file_id = config.get("file_id")
+        if file_id:
+            file_ids.append(str(file_id))
+    return file_ids
 
 
 class WorkflowSaveRequest(BaseModel):
@@ -39,11 +51,13 @@ class WorkflowPreviewNodeRequest(BaseModel):
 
 
 @router.post("/save")
-async def save_workflow(request: WorkflowSaveRequest):
+async def save_workflow(request: WorkflowSaveRequest, http_request: Request):
     """保存工作流"""
+    owner_id = http_request.state.owner_id
     workflow_id = str(uuid.uuid4())
     
     await workflow_engine.save_workflow(
+        owner_id=owner_id,
         workflow_id=workflow_id,
         name=request.name,
         description=request.description,
@@ -57,13 +71,15 @@ async def save_workflow(request: WorkflowSaveRequest):
 
 
 @router.put("/{workflow_id}")
-async def update_workflow(workflow_id: str, request: WorkflowSaveRequest):
+async def update_workflow(workflow_id: str, request: WorkflowSaveRequest, http_request: Request):
     """更新工作流"""
-    existing = await workflow_engine.get_workflow(workflow_id)
+    owner_id = http_request.state.owner_id
+    existing = await workflow_engine.get_workflow(owner_id, workflow_id)
     if not existing:
         raise HTTPException(status_code=404, detail="工作流不存在")
     
     await workflow_engine.save_workflow(
+        owner_id=owner_id,
         workflow_id=workflow_id,
         name=request.name,
         description=request.description,
@@ -74,35 +90,38 @@ async def update_workflow(workflow_id: str, request: WorkflowSaveRequest):
 
 
 @router.get("/list")
-async def list_workflows():
+async def list_workflows(http_request: Request):
     """获取所有工作流"""
-    workflows = await workflow_engine.get_all_workflows()
+    owner_id = http_request.state.owner_id
+    workflows = await workflow_engine.get_all_workflows(owner_id)
     return {"workflows": workflows}
 
 
 @router.get("/{workflow_id}")
-async def get_workflow(workflow_id: str):
+async def get_workflow(workflow_id: str, http_request: Request):
     """获取单个工作流"""
-    workflow = await workflow_engine.get_workflow(workflow_id)
+    owner_id = http_request.state.owner_id
+    workflow = await workflow_engine.get_workflow(owner_id, workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
     return workflow
 
 
 @router.delete("/{workflow_id}")
-async def delete_workflow(workflow_id: str):
+async def delete_workflow(workflow_id: str, http_request: Request):
     """删除工作流"""
-    existing = await workflow_engine.get_workflow(workflow_id)
+    owner_id = http_request.state.owner_id
+    existing = await workflow_engine.get_workflow(owner_id, workflow_id)
     if not existing:
         raise HTTPException(status_code=404, detail="工作流不存在")
-    deleted = await workflow_engine.delete_workflow(workflow_id)
+    deleted = await workflow_engine.delete_workflow(owner_id, workflow_id)
     if not deleted:
         raise HTTPException(status_code=400, detail="删除失败")
     return {"message": "工作流已删除"}
 
 
 @router.post("/execute")
-async def execute_workflow(request: WorkflowExecuteRequest):
+async def execute_workflow(request: WorkflowExecuteRequest, http_request: Request):
     """
     执行工作流
     
@@ -111,12 +130,31 @@ async def execute_workflow(request: WorkflowExecuteRequest):
     """
     try:
         # 执行工作流 (使用新的引擎API)
+        owner_id = http_request.state.owner_id
+        file_ids = list(request.file_mapping.keys()) if request.file_mapping else _extract_file_ids(request.workflow_config)
+        file_paths = await excel_service.get_file_paths(file_ids, owner_id)
+        missing = [fid for fid in file_ids if fid not in file_paths]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"找不到文件: {missing}")
+
         result = await workflow_engine.execute_workflow(
             request.workflow_config,
-            request.file_mapping
+            file_paths,
+            owner_id
         )
         
         if result.get("success"):
+            output_file = result.get("output_file")
+            if output_file:
+                workflow_id = str(request.workflow_config.get("id") or "")
+                await workflow_engine.save_execution_history(
+                    owner_id=owner_id,
+                    workflow_id=workflow_id,
+                    input_files=file_ids,
+                    output_file=output_file,
+                    status="success",
+                    result_summary=""
+                )
             return result
 
         # 失败时保留结构化信息（node_status/node_results/logs），便于前端定位到具体报错节点
@@ -130,19 +168,27 @@ async def execute_workflow(request: WorkflowExecuteRequest):
 
 
 @router.post("/preview-node")
-async def preview_node(request: WorkflowPreviewNodeRequest):
+async def preview_node(request: WorkflowPreviewNodeRequest, http_request: Request):
     """
     预览指定节点的输出（样本执行）：
     - 数据源最多读取 source_rows 行（默认600）
     - 返回 display_rows 行（默认50）与统计信息
     """
     try:
+        owner_id = http_request.state.owner_id
+        file_ids = list(request.file_mapping.keys()) if request.file_mapping else _extract_file_ids(request.workflow_config)
+        file_paths = await excel_service.get_file_paths(file_ids, owner_id)
+        missing = [fid for fid in file_ids if fid not in file_paths]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"找不到文件: {missing}")
+
         result = await workflow_engine.preview_node(
             request.workflow_config,
-            request.file_mapping,
+            file_paths,
             request.node_id,
             source_rows=int(request.source_rows or 600),
-            display_rows=int(request.display_rows or 50)
+            display_rows=int(request.display_rows or 50),
+            owner_id=owner_id
         )
 
         if result.get("success"):
@@ -158,15 +204,20 @@ async def preview_node(request: WorkflowPreviewNodeRequest):
 
 
 @router.get("/history/list")
-async def get_execution_history(limit: int = 50):
+async def get_execution_history(http_request: Request, limit: int = 50):
     """获取执行历史"""
-    history = await workflow_engine.get_execution_history(limit)
+    owner_id = http_request.state.owner_id
+    history = await workflow_engine.get_execution_history(owner_id, limit)
     return {"history": history}
 
 
 @router.get("/download/{filename}")
-async def download_result(filename: str):
+async def download_result(filename: str, http_request: Request):
     """下载结果文件"""
+    owner_id = http_request.state.owner_id
+    record = await workflow_engine.get_execution_history_by_output(owner_id, filename)
+    if not record:
+        raise HTTPException(status_code=404, detail="文件不存在")
     file_path = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="文件不存在")

@@ -25,7 +25,7 @@ class AIChatService:
         self.client = OpenAI(api_key=ARK_API_KEY, base_url=ARK_BASE_URL)
         self.model = ARK_MODEL_NAME
         
-    def start_session(self, selected_files: List[dict], file_metadata: List[dict]) -> dict:
+    def start_session(self, owner_id: str, selected_files: List[dict], file_metadata: List[dict]) -> dict:
         """
         开始新的对话会话
         
@@ -51,6 +51,7 @@ class AIChatService:
         # 初始化会话
         chat_sessions[session_id] = {
             "created_at": datetime.now().isoformat(),
+            "owner_id": owner_id,
             "selected_files": selected_files,
             "file_metadata": file_metadata,
             "tables_context": tables_context,
@@ -77,7 +78,7 @@ class AIChatService:
             "status": "clarifying"
         }
     
-    def send_message(self, session_id: str, user_message: str) -> dict:
+    def send_message(self, owner_id: str, session_id: str, user_message: str) -> dict:
         """
         发送用户消息，获取AI回复
         
@@ -95,6 +96,9 @@ class AIChatService:
             return {"error": "会话不存在或已过期", "status": "error"}
         
         session = chat_sessions[session_id]
+        if session.get("owner_id") != owner_id:
+            logger.error(f"[AIChatService] 会话归属不匹配: {session_id}")
+            return {"error": "会话不存在或已过期", "status": "error"}
         
         # 添加用户消息
         session["messages"].append({
@@ -135,7 +139,7 @@ class AIChatService:
             logger.error(f"[AIChatService] AI调用失败: {e}")
             return {"error": str(e), "status": "error"}
     
-    def generate_workflow(self, session_id: str) -> dict:
+    def generate_workflow(self, owner_id: str, session_id: str) -> dict:
         """
         根据对话生成工作流
         
@@ -152,6 +156,9 @@ class AIChatService:
             return {"error": "会话不存在", "status": "error"}
         
         session = chat_sessions[session_id]
+        if session.get("owner_id") != owner_id:
+            logger.error(f"[AIChatService] 会话归属不匹配: {session_id}")
+            return {"error": "会话不存在", "status": "error"}
         
         # 构建文件信息映射，供AI使用真实的file_id和列名
         file_info_lines = []

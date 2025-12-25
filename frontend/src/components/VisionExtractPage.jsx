@@ -856,6 +856,13 @@ export default function VisionExtractPage() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    let idleTimer = null;
+    let finalized = false;
+    const clearIdleTimer = () => {
+      if (!idleTimer) return;
+      window.clearTimeout(idleTimer);
+      idleTimer = null;
+    };
 
     try {
       const data = await visionApi.startExtractText(pickedFile, prompt, {
@@ -895,6 +902,9 @@ export default function VisionExtractPage() {
       eventSourceRef.current = es;
 
       const finalizeJob = (shouldContinue) => {
+        if (finalized) return;
+        finalized = true;
+        clearIdleTimer();
         closeStream();
         resetActiveJob();
         clearActiveJob();
@@ -917,7 +927,32 @@ export default function VisionExtractPage() {
         setIsLoading(false);
       };
 
+      const failJob = (message) => {
+        if (finalized) return;
+        setStage('error');
+        setErrorKind('error');
+        setError(message);
+        addChat('system', message);
+        pendingFilesRef.current = [];
+        finalizeJob(false);
+      };
+
+      const touchIdleTimer = () => {
+        if (finalized) return;
+        clearIdleTimer();
+        idleTimer = window.setTimeout(() => {
+          failJob('连接中断，请重试');
+        }, 65000);
+      };
+
+      touchIdleTimer();
+
+      es.addEventListener('open', () => {
+        touchIdleTimer();
+      });
+
       es.addEventListener('snapshot', (evt) => {
+        touchIdleTimer();
         try {
           const payload = JSON.parse(evt.data || '{}');
           const s = payload?.stage;
@@ -935,6 +970,7 @@ export default function VisionExtractPage() {
       });
 
       es.addEventListener('stage', (evt) => {
+        touchIdleTimer();
         try {
           const payload = JSON.parse(evt.data || '{}');
           const s = payload?.stage;
@@ -951,6 +987,7 @@ export default function VisionExtractPage() {
       });
 
       es.addEventListener('delta', (evt) => {
+        touchIdleTimer();
         try {
           const payload = JSON.parse(evt.data || '{}');
           const delta = payload?.text || '';
@@ -968,6 +1005,7 @@ export default function VisionExtractPage() {
       });
 
       es.addEventListener('done', (evt) => {
+        touchIdleTimer();
         try {
           const payload = JSON.parse(evt.data || '{}');
           const text = payload?.text || '';
@@ -994,6 +1032,7 @@ export default function VisionExtractPage() {
       });
 
       es.addEventListener('cancelled', () => {
+        touchIdleTimer();
         const mode = cancelModeRef.current;
         const isSkip = mode === 'skip';
         setStage('cancelled');
@@ -1011,6 +1050,7 @@ export default function VisionExtractPage() {
       });
 
       es.addEventListener('job_error', (evt) => {
+        touchIdleTimer();
         try {
           const payload = JSON.parse(evt.data || '{}');
           setStage('error');
@@ -1028,15 +1068,15 @@ export default function VisionExtractPage() {
         }
       });
 
+      es.addEventListener('ping', () => {
+        touchIdleTimer();
+      });
+
       es.onerror = () => {
-        setStage('error');
-        setErrorKind('error');
-        setError('连接中断，请重试');
-        addChat('system', '连接中断，请重试');
-        pendingFilesRef.current = [];
-        finalizeJob(false);
+        failJob('连接中断，请重试');
       };
     } catch (e) {
+      clearIdleTimer();
       const detail = e?.response?.data?.detail;
       const msg = detail || e?.message || '请求失败，请确认后端已启动';
       setStage('error');
@@ -1419,7 +1459,10 @@ export default function VisionExtractPage() {
             accept="image/*,application/pdf"
             multiple
             style={{ display: 'none' }}
-            onChange={(e) => handleFile(e.target.files)}
+            onChange={(e) => {
+              handleFile(e.target.files);
+              e.target.value = '';
+            }}
           />
         </div>
 
