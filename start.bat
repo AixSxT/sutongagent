@@ -31,14 +31,14 @@ if not exist "frontend\node_modules" (
 
 echo [4/4] 启动服务...
 echo.
-echo 后端服务: http://localhost:8000
+echo 后端服务: http://localhost:5201
 echo 前端服务: http://localhost:3000
 echo.
 echo 按 Ctrl+C 停止服务
 echo ========================================
 
 REM 启动后端
-start "Excel Workflow Backend" cmd /k "cd backend && venv\Scripts\activate.bat && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"
+start "Excel Workflow Backend" cmd /k "cd backend && venv\Scripts\activate.bat && python -m uvicorn main:app --reload --host 0.0.0.0 --port 5201"
 
 REM 等待后端启动
 timeout /t 3 /nobreak > nul
